@@ -1,0 +1,130 @@
+package tenant
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/attisvalentin/supacraft/internal/config"
+	_ "modernc.org/sqlite"
+)
+
+// DB wraps *sql.DB with pgx-style method names for call-site brevity.
+// Query/Exec/QueryRow accept context.Context as the first
+// argument and delegate to the *Context variants on *sql.DB.
+type DB struct {
+	*sql.DB
+}
+
+func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return d.DB.QueryContext(ctx, query, args...)
+}
+
+func (d *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	return d.DB.QueryRowContext(ctx, query, args...)
+}
+
+func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return d.DB.ExecContext(ctx, query, args...)
+}
+
+type poolEntry struct {
+	db *DB
+	// lastAccessed is unix-nano, accessed from both request goroutines and the
+	// evictor goroutine, so it must be touched atomically.
+	lastAccessed atomic.Int64
+}
+
+func (e *poolEntry) touch() { e.lastAccessed.Store(time.Now().UnixNano()) }
+
+// PoolManager maintains one *DB per physical database file, keyed by db_name.
+// Each tenant's data lives in {DataDir}/{dbName}.db. SQLite serializes writers so
+// MaxOpenConns is capped at 1 to avoid SQLITE_BUSY noise.
+type PoolManager struct {
+	pools   sync.Map
+	dataDir string
+}
+
+func NewPoolManager(cfg *config.Config) *PoolManager {
+	return &PoolManager{dataDir: cfg.DataDir}
+}
+
+// GetPool returns (and lazily opens) the *DB for the given tenant.
+//
+// The pool is keyed by the physical database file (db_name), NOT by
+// cfg.Schema.TenantID: compiled configs leave schema.tenant_id empty, so
+// keying on it collapsed every tenant onto a single shared connection (the ""
+// key) — a cross-tenant data-isolation bug. db_name is unique per tenant file.
+func (pm *PoolManager) GetPool(ctx context.Context, cfg *TenantConfig) (*DB, error) {
+	dbName := cfg.DBName
+	if dbName == "" {
+		dbName = cfg.Schema.TenantID
+	}
+	if dbName == "" {
+		// Never fall back to the "" catch-all key — that is the very bug this
+		// keying fixes. A config with neither db_name nor tenant_id is invalid.
+		return nil, fmt.Errorf("tenant config has no db_name")
+	}
+
+	if val, ok := pm.pools.Load(dbName); ok {
+		entry := val.(*poolEntry)
+		entry.touch()
+		return entry.db, nil
+	}
+
+	dsn := filepath.Join(pm.dataDir, dbName+".db") +
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)&_pragma=synchronous(normal)"
+
+	sqlDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open sqlite: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetConnMaxIdleTime(30 * time.Minute)
+
+	if err := sqlDB.PingContext(ctx); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("failed to ping sqlite: %w", err)
+	}
+
+	entry := &poolEntry{db: &DB{DB: sqlDB}}
+	entry.touch()
+	// Another goroutine may have opened the same db concurrently; if so, keep the
+	// existing pool and discard ours to avoid leaking a connection.
+	if actual, loaded := pm.pools.LoadOrStore(dbName, entry); loaded {
+		sqlDB.Close()
+		existing := actual.(*poolEntry)
+		existing.touch()
+		return existing.db, nil
+	}
+	return entry.db, nil
+}
+
+// StartEvictor closes pools that have been idle longer than 30 minutes.
+func (pm *PoolManager) StartEvictor(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pm.pools.Range(func(key, value any) bool {
+					entry := value.(*poolEntry)
+					last := time.Unix(0, entry.lastAccessed.Load())
+					if time.Since(last) > 30*time.Minute {
+						entry.db.Close()
+						pm.pools.Delete(key)
+					}
+					return true
+				})
+			}
+		}
+	}()
+}

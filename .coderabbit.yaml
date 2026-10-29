@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        Check for correctness, error handling and SQL safety (column and table names must be
+        quoted and validated against the schema; values must be bound parameters).
+        Flag any write to stdout in code reachable from `supacraft mcp`, since stdout is the
+        MCP transport.
+    - path: "internal/sqlitedb/**"
+      instructions: |
+        Migrations must stay additive: CREATE TABLE IF NOT EXISTS and ALTER TABLE ADD COLUMN only.
+        Flag any DROP, RENAME or type change.
+    - path: "internal/pipeline/**"
+      instructions: |
+        A new or changed step type must also be handled in internal/project/validate.go and
+        documented in internal/docs/reference.md. Point out when either is missing.
+    - path: "internal/project/**"
+      instructions: |
+        Validation errors must carry an exact JSON path into supacraft.json. Secrets must never be
+        written back into supacraft.json.
+    - path: "internal/docs/reference.md"
+      instructions: Check that documented fields and behaviour match the Go models and handlers.
+chat:
+  auto_reply: true

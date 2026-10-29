@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SupaCraft Studio</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
+    --muted: #8b949e; --accent: #2f81f7; --accent-soft: #1f6feb33; --row: #11161d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header .brand { font-weight: 600; letter-spacing: .2px; }
+  header .brand span { color: var(--accent); }
+  header select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font-size: 13px; min-width: 220px;
+  }
+  header .spacer { flex: 1; }
+  header .hint { color: var(--muted); font-size: 12px; }
+  main { flex: 1; display: flex; min-height: 0; }
+  aside {
+    width: 240px; border-right: 1px solid var(--border); overflow-y: auto;
+    background: var(--panel); padding: 8px;
+  }
+  aside .group-title { color: var(--muted); text-transform: uppercase; font-size: 11px;
+    letter-spacing: .5px; padding: 8px 8px 4px; }
+  .table-btn {
+    display: flex; justify-content: space-between; align-items: center; width: 100%;
+    text-align: left; background: transparent; color: var(--text); border: none;
+    padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .table-btn:hover { background: #1c2330; }
+  .table-btn.active { background: var(--accent-soft); color: #fff; }
+  .table-btn .count { color: var(--muted); font-size: 11px; }
+  section.content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  .toolbar .title { font-weight: 600; }
+  .toolbar .spacer { flex: 1; }
+  .pager { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .pager button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 9px; cursor: pointer;
+  }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .grid-wrap { flex: 1; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  thead th {
+    position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border);
+    text-align: left; padding: 7px 10px; white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  thead th .pk { color: var(--accent); font-size: 10px; margin-left: 4px; }
+  thead th .type { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 6px; }
+  thead th .arrow { color: var(--accent); margin-left: 4px; }
+  tbody td {
+    padding: 6px 10px; border-bottom: 1px solid #1c222b; white-space: nowrap;
+    max-width: 420px; overflow: hidden; text-overflow: ellipsis;
+  }
+  tbody tr:nth-child(even) { background: var(--row); }
+  tbody td.null { color: var(--muted); font-style: italic; }
+  .empty, .error { padding: 40px; color: var(--muted); text-align: center; }
+  .error { color: #f85149; }
+  .filter-bar {
+    display: flex; gap: 6px; align-items: center; padding: 8px 12px;
+    border-bottom: 1px solid var(--border); background: var(--bg);
+  }
+  .filter-bar select, .filter-bar input {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px;
+  }
+  .filter-bar button {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 5px 12px; cursor: pointer;
+  }
+  .filter-bar button.ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  #loginOverlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); z-index: 10;
+  }
+  #loginOverlay.hidden { display: none; }
+  .login-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 28px 32px; width: 280px; text-align: center;
+  }
+  .login-card .brand { font-weight: 600; font-size: 16px; margin-bottom: 18px; }
+  .login-card .brand span { color: var(--accent); }
+  .login-card input {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px;
+  }
+  .login-card button {
+    width: 100%; background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 0; font-size: 13px; cursor: pointer;
+  }
+  .login-card .error { color: #f85149; font-size: 12px; min-height: 16px; margin-top: 8px; }
+  #app.hidden { display: none; }
+  header .logout {
+    color: var(--muted); font-size: 12px; cursor: pointer; background: none; border: none;
+  }
+  header .logout:hover { color: var(--text); }
+</style>
+</head>
+<body>
+<div id="loginOverlay">
+  <div class="login-card">
+    <div class="brand">SupaCraft <span>Studio</span></div>
+    <form id="loginForm">
+      <input id="loginPassword" type="password" placeholder="Studio secret" autofocus autocomplete="current-password" />
+      <button type="submit">Sign in</button>
+      <div class="error" id="loginError"></div>
+    </form>
+  </div>
+</div>
+<div id="app" class="hidden">
+<header>
+  <div class="brand">SupaCraft <span>Studio</span></div>
+  <select id="tenant"></select>
+  <div class="spacer"></div>
+  <button class="logout" id="logout">Log out</button>
+  <div class="hint">read-only viewer</div>
+</header>
+<main>
+  <aside>
+    <div class="group-title">Tables</div>
+    <div id="tables"></div>
+  </aside>
+  <section class="content">
+    <div class="toolbar">
+      <div class="title" id="tableTitle">Select a table</div>
+      <div class="spacer"></div>
+      <div class="pager">
+        <span id="pageInfo"></span>
+        <button id="prev" disabled>‹ Prev</button>
+        <button id="next" disabled>Next ›</button>
+      </div>
+    </div>
+    <div class="filter-bar" id="filterBar" style="display:none">
+      <select id="fCol"></select>
+      <select id="fOp">
+        <option value="eq">=</option>
+        <option value="neq">≠</option>
+        <option value="like">contains</option>
+        <option value="gt">&gt;</option>
+        <option value="gte">≥</option>
+        <option value="lt">&lt;</option>
+        <option value="lte">≤</option>
+      </select>
+      <input id="fVal" placeholder="value" />
+      <button id="fApply">Filter</button>
+      <button id="fClear" class="ghost">Clear</button>
+    </div>
+    <div class="grid-wrap" id="grid">
+      <div class="empty">Pick a tenant and a table to browse its data.</div>
+    </div>
+  </section>
+</main>
+</div>
+
+<script>
+const PAGE = 50;
+const state = { tenant: null, schema: null, table: null, cols: [], offset: 0,
+  orderBy: "", desc: false, filter: null, total: 0 };
+
+const $ = (id) => document.getElementById(id);
+
+class AuthError extends Error {}
+
+async function api(path) {
+  const res = await fetch(path);
+  if (res.status === 401) throw new AuthError();
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+async function loadTenants() {
+  const tenants = await api("/api/tenants");
+  const sel = $("tenant");
+  sel.innerHTML = "";
+  if (!tenants.length) {
+    sel.innerHTML = '<option>No tenants found</option>';
+    return;
+  }
+  for (const t of tenants) {
+    const o = document.createElement("option");
+    o.value = t.id;
+    o.textContent = `${t.display_name} (${t.table_count} tables)`;
+    sel.appendChild(o);
+  }
+  await selectTenant(tenants[0].id);
+}
+
+async function selectTenant(id) {
+  state.tenant = id; state.table = null; state.schema = null;
+  $("tenant").value = id;
+  state.schema = await api(`/api/tenants/${id}/schema`);
+  renderTables();
+  $("tableTitle").textContent = "Select a table";
+  $("filterBar").style.display = "none";
+  $("grid").innerHTML = '<div class="empty">Select a table to browse its data.</div>';
+}
+
+function renderTables() {
+  const box = $("tables");
+  box.innerHTML = "";
+  if (!state.schema.tables || !state.schema.tables.length) {
+    box.innerHTML = '<div class="empty">No tables.</div>';
+    return;
+  }
+  for (const t of state.schema.tables) {
+    const b = document.createElement("button");
+    b.className = "table-btn" + (t.name === state.table ? " active" : "");
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = t.name;
+    const countSpan = document.createElement("span");
+    countSpan.className = "count";
+    countSpan.textContent = "…";
+    b.append(nameSpan, countSpan);
+    b.onclick = () => openTable(t.name);
+    box.appendChild(b);
+    loadTableCount(t.name, countSpan);
+  }
+}
+
+async function loadTableCount(name, el) {
+  try {
+    const page = await api(`/api/tenants/${state.tenant}/tables/${encodeURIComponent(name)}/rows?limit=1`);
+    el.textContent = page.total;
+  } catch {
+    el.textContent = "?";
+  }
+}
+
+function tableSchema(name) {
+  return (state.schema.tables || []).find((t) => t.name === name);
+}
+
+function openTable(name) {
+  state.table = name;
+  state.cols = tableSchema(name).columns;
+  state.offset = 0; state.orderBy = ""; state.desc = false; state.filter = null;
+  renderTables();
+  $("tableTitle").textContent = name;
+  setupFilterBar();
+  loadRows();
+}
+
+function setupFilterBar() {
+  $("filterBar").style.display = "flex";
+  const fCol = $("fCol");
+  fCol.innerHTML = "";
+  for (const c of state.cols) {
+    const o = document.createElement("option");
+    o.value = c.name; o.textContent = c.name;
+    fCol.appendChild(o);
+  }
+  $("fVal").value = "";
+}
+
+async function loadRows() {
+  const grid = $("grid");
+  grid.innerHTML = '<div class="empty">Loading…</div>';
+  let url = `/api/tenants/${state.tenant}/tables/${encodeURIComponent(state.table)}/rows`
+    + `?limit=${PAGE}&offset=${state.offset}`;
+  if (state.orderBy) url += `&order_by=${encodeURIComponent(state.orderBy)}&desc=${state.desc ? 1 : 0}`;
+  if (state.filter) url += `&filter=${encodeURIComponent(state.filter)}`;
+  try {
+    const page = await api(url);
+    state.total = page.total;
+    renderGrid(page);
+    renderPager();
+  } catch (e) {
+    grid.innerHTML = `<div class="error">${e.message}</div>`;
+  }
+}
+
+function renderGrid(page) {
+  if (!page.rows.length) {
+    $("grid").innerHTML = '<div class="empty">No rows.</div>';
+    return;
+  }
+  const colMeta = {};
+  for (const c of state.cols) colMeta[c.name] = c;
+  const thead = page.columns.map((c) => {
+    const meta = colMeta[c] || {};
+    const arrow = state.orderBy === c ? `<span class="arrow">${state.desc ? "▼" : "▲"}</span>` : "";
+    const pk = meta.pk ? '<span class="pk">PK</span>' : "";
+    const type = meta.type ? `<span class="type">${meta.type}</span>` : "";
+    return `<th data-col="${c}">${c}${pk}${type}${arrow}</th>`;
+  }).join("");
+  const body = page.rows.map((r) => {
+    const tds = page.columns.map((c) => {
+      const v = r[c];
+      if (v === null || v === undefined) return '<td class="null">NULL</td>';
+      return `<td title="${escapeAttr(String(v))}">${escapeHtml(String(v))}</td>`;
+    }).join("");
+    return `<tr>${tds}</tr>`;
+  }).join("");
+  $("grid").innerHTML = `<table><thead><tr>${thead}</tr></thead><tbody>${body}</tbody></table>`;
+  for (const th of document.querySelectorAll("thead th")) {
+    th.onclick = () => sortBy(th.dataset.col);
+  }
+}
+
+function sortBy(col) {
+  if (state.orderBy === col) state.desc = !state.desc;
+  else { state.orderBy = col; state.desc = false; }
+  state.offset = 0;
+  loadRows();
+}
+
+function renderPager() {
+  const from = state.total === 0 ? 0 : state.offset + 1;
+  const to = Math.min(state.offset + PAGE, state.total);
+  $("pageInfo").textContent = `${from}–${to} of ${state.total}`;
+  $("prev").disabled = state.offset <= 0;
+  $("next").disabled = state.offset + PAGE >= state.total;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/"/g, "&quot;");
+}
+
+$("tenant").onchange = (e) => selectTenant(e.target.value);
+$("prev").onclick = () => { state.offset = Math.max(0, state.offset - PAGE); loadRows(); };
+$("next").onclick = () => { state.offset += PAGE; loadRows(); };
+$("fApply").onclick = () => {
+  const col = $("fCol").value, op = $("fOp").value, val = $("fVal").value;
+  state.filter = `${col}:${op}:${val}`;
+  state.offset = 0;
+  loadRows();
+};
+$("fClear").onclick = () => { state.filter = null; $("fVal").value = ""; state.offset = 0; loadRows(); };
+$("fVal").addEventListener("keydown", (e) => { if (e.key === "Enter") $("fApply").click(); });
+
+function showApp() {
+  $("loginOverlay").classList.add("hidden");
+  $("app").classList.remove("hidden");
+}
+function showLogin(message) {
+  $("app").classList.add("hidden");
+  $("loginOverlay").classList.remove("hidden");
+  $("loginError").textContent = message || "";
+}
+
+async function boot() {
+  try {
+    await loadTenants();
+    showApp();
+  } catch (e) {
+    if (e instanceof AuthError) showLogin();
+    else showLogin(e.message);
+  }
+}
+
+$("loginForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const password = $("loginPassword").value;
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || "Sign in failed");
+    $("loginPassword").value = "";
+    await boot();
+  } catch (e) {
+    $("loginError").textContent = e.message;
+  }
+};
+
+$("logout").onclick = async () => {
+  await fetch("/api/logout", { method: "POST" });
+  showLogin();
+};
+
+boot();
+</script>
+</body>
+</html>
