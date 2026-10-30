@@ -319,8 +319,13 @@ func TestJSONBodyIsCapped(t *testing.T) {
 	if code, _, _ := api.do("POST", "/fn/posts/delete", `{"id":"`+strings.Repeat("a", 1<<17)+`"}`); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized function body: %d, want 413", code)
 	}
-	if code, _, _ := api.do("POST", "/fn/posts/delete", `{"id":`); code != http.StatusBadRequest {
-		t.Fatalf("malformed function body: %d, want 400", code)
+	for _, body := range []string{`{"id":`, `{"id":"x"} garbage`, `{"id":"x"}{"id":"y"}`} {
+		if code, _, _ := api.do("POST", "/fn/posts/delete", body); code != http.StatusBadRequest {
+			t.Errorf("malformed function body %q: %d, want 400", body, code)
+		}
+	}
+	if code, _, _ := api.do("POST", "/fn/posts/delete", `{"id":"x"}`+strings.Repeat(" ", 1<<17)); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("padded oversized body: %d, want 413", code)
 	}
 }
 
@@ -332,6 +337,7 @@ func TestServedInline(t *testing.T) {
 		"image/svg+xml":             false,
 		"image/png":                 true,
 		"video/mp4":                 true,
+		"application/ogg":           true,
 		"application/pdf":           true,
 	} {
 		if got := servedInline(ct); got != want {

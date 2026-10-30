@@ -632,7 +632,7 @@ Use this section when writing scripts, `curl` commands, or client code that talk
 
 Available when `auth_enabled: true` on the tenant and the specific endpoint is enabled in `api_settings.auth_endpoints`.
 
-- Passwords must be at least 8 characters (at most 72 bytes). Change the minimum with `api_settings.auth.password_min_length` (at most 72).
+- Passwords need at least `api_settings.auth.password_min_length` characters (default 8, allowed 1–72) and at most 72 bytes.
 - Register accepts `email`, `password` and any **creatable** column you added to `users` (e.g. a display name). Columns that grant access (`role`, `is_admin`, `plan`, …) must be `"creatable": false, "updatable": false`, otherwise anyone can register as an admin; validation warns about such columns.
 - The built-in columns (`id`, `email`, `password`, `is_active`, `created_at`, `updated_at`) keep their own settings even if you declare them in `users`. `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens. Access tokens already issued stay valid until they expire (`api_settings.auth.access_token_ttl`, seconds, default 86400).
 

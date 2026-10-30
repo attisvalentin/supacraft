@@ -291,7 +291,7 @@ func servedInline(contentType string) bool {
 		return false
 	}
 	return strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "audio/") ||
-		strings.HasPrefix(ct, "video/") || ct == "application/pdf"
+		strings.HasPrefix(ct, "video/") || ct == "application/ogg" || ct == "application/pdf"
 }
 
 func extensionFromMIME(mimeType, originalFilename string) string {
