@@ -3,9 +3,6 @@ package studio
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,13 +11,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/attisvalentin/supacraft/internal/studiosign"
 )
 
 // ProxySource implements DataSource by calling the /admin/studio endpoints on a
 // remote SupaCraft API over HTTPS, instead of reading the database directly. This
 // is for deployments where the DB isn't reachable from the operator's machine.
-// Requests are HMAC-authenticated:
-// X-Signature = "sha256=" + hex(HMAC-SHA256(secret, "<unix-ts>.<body>")).
+// Requests are HMAC-signed with a timestamp and single-use nonce; see
+// internal/studiosign.
 type ProxySource struct {
 	baseURL string
 	secret  string
@@ -107,8 +106,10 @@ func (s *ProxySource) do(ctx context.Context, method, path string, reqBody, out 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Timestamp", strconv.FormatInt(ts, 10))
-	req.Header.Set("X-Signature", proxySign(s.secret, ts, bodyBytes))
+	nonce := studiosign.NewNonce()
+	req.Header.Set(studiosign.HeaderTimestamp, strconv.FormatInt(ts, 10))
+	req.Header.Set(studiosign.HeaderNonce, nonce)
+	req.Header.Set(studiosign.HeaderSignature, studiosign.Sign(s.secret, ts, nonce, method, path, bodyBytes))
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -151,10 +152,3 @@ type statusError struct {
 }
 
 func (e *statusError) Error() string { return e.msg }
-
-func proxySign(secret string, ts int64, body []byte) string {
-	payload := strconv.FormatInt(ts, 10) + "." + string(body)
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(payload))
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
-}

@@ -3,27 +3,24 @@ package middleware
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/attisvalentin/supacraft/internal/studiosign"
 )
 
 // studioMaxBody caps the request body the studio HMAC middleware will buffer.
 const studioMaxBody = 1 << 20 // 1 MiB
 
-// studioSkewSeconds is the allowed clock skew between the operator's CLI and the
-// API server when validating the signed timestamp (replay protection).
-const studioSkewSeconds = 300
-
-// StudioAuth verifies the operator HMAC on /admin/studio requests. It mirrors the
-// log-ingestion signing scheme: X-Signature = "sha256=" + hex(HMAC-SHA256(secret,
-// "<unix-ts>.<raw-body>")), with the timestamp in X-Timestamp. When secret is
-// empty the endpoints are disabled (every request is rejected).
+// StudioAuth verifies the operator signature on /admin/studio requests (see
+// internal/studiosign): a fresh timestamp, an unused nonce, and an HMAC over
+// both plus the method, URI and body. When secret is empty the endpoints are
+// disabled (every request is rejected).
 func StudioAuth(secret string) func(http.Handler) http.Handler {
+	nonces := studiosign.NewNonceCache()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if secret == "" {
@@ -31,10 +28,11 @@ func StudioAuth(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			sig := r.Header.Get("X-Signature")
-			tsStr := r.Header.Get("X-Timestamp")
-			if sig == "" || tsStr == "" {
-				writeStudioErr(w, http.StatusUnauthorized, "missing signature or timestamp")
+			sig := r.Header.Get(studiosign.HeaderSignature)
+			tsStr := r.Header.Get(studiosign.HeaderTimestamp)
+			nonce := r.Header.Get(studiosign.HeaderNonce)
+			if sig == "" || tsStr == "" || !studiosign.ValidNonce(nonce) {
+				writeStudioErr(w, http.StatusUnauthorized, "missing signature, timestamp or nonce")
 				return
 			}
 			ts, err := strconv.ParseInt(tsStr, 10, 64)
@@ -42,7 +40,8 @@ func StudioAuth(secret string) func(http.Handler) http.Handler {
 				writeStudioErr(w, http.StatusUnauthorized, "invalid timestamp")
 				return
 			}
-			if diff := time.Now().Unix() - ts; diff > studioSkewSeconds || diff < -studioSkewSeconds {
+			now := time.Now()
+			if d := now.Sub(time.Unix(ts, 0)); d > studiosign.MaxSkew || d < -studiosign.MaxSkew {
 				writeStudioErr(w, http.StatusUnauthorized, "stale or future timestamp")
 				return
 			}
@@ -54,22 +53,21 @@ func StudioAuth(secret string) func(http.Handler) http.Handler {
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
 
-			expected := studioSign(secret, ts, body)
+			expected := studiosign.Sign(secret, ts, nonce, r.Method, r.URL.RequestURI(), body)
 			if !hmac.Equal([]byte(sig), []byte(expected)) {
 				writeStudioErr(w, http.StatusUnauthorized, "invalid signature")
+				return
+			}
+			// Only a correctly signed request consumes its nonce, so garbage
+			// requests cannot fill the cache.
+			if !nonces.Use(nonce, now) {
+				writeStudioErr(w, http.StatusUnauthorized, "request already used")
 				return
 			}
 
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-func studioSign(secret string, ts int64, body []byte) string {
-	payload := strconv.FormatInt(ts, 10) + "." + string(body)
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(payload))
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func writeStudioErr(w http.ResponseWriter, status int, msg string) {

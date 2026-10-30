@@ -15,15 +15,6 @@ import (
 
 const maxHTTPResponseBody = 10 * 1024 * 1024 // 10 MB
 
-var httpClient = &http.Client{
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return fmt.Errorf("http.request: too many redirects (max 5)")
-		}
-		return nil
-	},
-}
-
 var validHTTPMethods = map[string]bool{
 	"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true,
 }
@@ -79,6 +70,9 @@ func ExecuteHTTPRequest(ctx context.Context, step *tenant.FunctionStep, pCtx *Pi
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("http.request: invalid url %q: %w", rawURL, err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("http.request: url must use http or https")
 	}
 	if len(interpolatedQuery) > 0 {
 		q := parsedURL.Query()
@@ -147,7 +141,11 @@ func ExecuteHTTPRequest(ctx context.Context, step *tenant.FunctionStep, pCtx *Pi
 	if stepLabel == "" {
 		stepLabel = "(no assign)"
 	}
-	resp, err := httpClient.Do(req)
+	client := httpClient
+	if templatedHost(step.URL) {
+		client = strictHTTPClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("http.request step failed: %s: %w", stepLabel, err)
 	}

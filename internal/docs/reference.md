@@ -412,6 +412,7 @@ Called function receives args as `{{args.user_id}}`, `{{args.amount}}`. Max recu
   "assign": "charge"
 }
 ```
+`url` must be `http` or `https`. Link-local addresses (including the `169.254.169.254` cloud metadata service) are never reachable. When the URL's host comes from a template (`"https://{{request.host}}/..."`), loopback and private networks are refused too, so request data can't aim the server at your internal network. A fixed host in the URL may be anything, including `localhost`.
 
 ### email.send (raw mode)
 ```json
