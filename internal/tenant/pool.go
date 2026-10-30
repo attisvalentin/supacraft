@@ -32,6 +32,41 @@ func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 	return d.DB.ExecContext(ctx, query, args...)
 }
 
+// Querier is what pipeline steps run SQL through: a *DB, or a *Tx inside a
+// transaction step.
+type Querier interface {
+	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) *sql.Row
+	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// Tx wraps *sql.Tx with the same method names as DB.
+type Tx struct {
+	*sql.Tx
+}
+
+func (t *Tx) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return t.Tx.QueryContext(ctx, query, args...)
+}
+
+func (t *Tx) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	return t.Tx.QueryRowContext(ctx, query, args...)
+}
+
+func (t *Tx) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return t.Tx.ExecContext(ctx, query, args...)
+}
+
+// Begin starts a transaction. Each tenant pool has a single connection, so
+// nothing else can use the database until the transaction ends.
+func (d *DB) Begin(ctx context.Context) (*Tx, error) {
+	tx, err := d.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &Tx{Tx: tx}, nil
+}
+
 type poolEntry struct {
 	db *DB
 	// lastAccessed is unix-nano, accessed from both request goroutines and the

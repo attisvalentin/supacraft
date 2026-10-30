@@ -249,3 +249,62 @@ func TestCompile_BuiltinAuthColumnsWin(t *testing.T) {
 		t.Error("custom users column dropped")
 	}
 }
+
+func TestValidate_PipelineCore(t *testing.T) {
+	p := load(t, `{
+  "name": "x",
+  "schema": {
+    "tables": [
+      {"name": "posts", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "title", "type": "text"}]},
+      {"name": "tags", "columns": [{"name": "id", "type": "uuid", "primary": true}]},
+      {"name": "comments", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "post_id", "type": "uuid"}]}],
+    "relations": [{"from": {"table": "comments", "column": "post_id"}, "to": {"table": "posts", "column": "id"}, "type": "one-to-many"}]
+  },
+  "functions": {
+    "a": {"route": {"path": "/fn/posts/{id}", "method": "GET",
+      "input": {"q": {"type": "strng"}, "n": {"type": "integer", "min": 5, "max": 1}, "s": {"type": "string", "pattern": "("}}},
+      "steps": [
+        {"type": "db.select", "table": "posts", "order_by": ["nope desc", "title sideways"], "limit": -1, "include": [{"table": "tags"}]},
+        {"type": "db.aggregate", "table": "posts", "aggregates": {"n": "median:title"}},
+        {"type": "db.select", "table": "comments", "columns": ["id"], "include": [{"table": "posts"}]},
+        {"type": "transaction", "steps": [{"type": "http.request", "url": "https://x.y"}, {"type": "response"}]},
+        {"type": "fail", "status_code": 200},
+        {"type": "try", "as": "bad name", "steps": [{"type": "fail"}]}]},
+    "b": {"route": {"path": "/fn/posts/{slug}", "method": "GET"}, "steps": [{"type": "response"}]},
+    "c": {"route": {"path": "/fn/x/{id", "method": "GET"}, "steps": [{"type": "response"}]}
+  }
+}`)
+	want := []string{
+		"functions.a.route.input.q.type",
+		"functions.a.route.input.n",
+		"functions.a.route.input.s.pattern",
+		"functions.a.steps[0].order_by",
+		"functions.a.steps[0].limit",
+		"functions.a.steps[0].include[0].table",
+		"functions.a.steps[1].aggregates.n",
+		"functions.a.steps[2].columns",
+		"functions.a.steps[3].steps[0]",
+		"functions.a.steps[3].steps[1]",
+		"functions.a.steps[4].status_code",
+		"functions.a.steps[5].as",
+		"functions.c.route.path",
+	}
+	got := map[string]bool{}
+	routeDup := false
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+			if strings.HasSuffix(i.Path, ".route") {
+				routeDup = true
+			}
+		}
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("missing error at %s (got %v)", w, got)
+		}
+	}
+	if !routeDup {
+		t.Error("/fn/posts/{id} and /fn/posts/{slug} not reported as the same route")
+	}
+}

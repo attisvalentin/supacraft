@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -57,7 +58,8 @@ var (
 		"blob", "binary", "enum")
 	relationTypes = setOf("one-to-one", "one-to-many", "many-to-many")
 	httpMethods   = setOf("GET", "POST", "PUT", "PATCH", "DELETE", "PRIVATE")
-	stepTypes     = setOf("db.select", "db.insert", "db.update", "db.delete", "if", "foreach",
+	stepTypes     = setOf("db.select", "db.aggregate", "db.insert", "db.update", "db.delete", "if", "foreach",
+		"transaction", "try", "fail",
 		"set_variable", "transform.sum", "transform.count", "transform.map", "transform.filter",
 		"transform.math", "transform.datetime", "response", "function.call", "http.request", "email.send")
 	storageDrivers = setOf("local", "s3", "ftp", "sftp", "gcs", "azure")
@@ -68,6 +70,25 @@ type validator struct {
 	tables    map[string]map[string]bool // table → columns
 	functions map[string]bool
 	templates map[string]bool
+	relations []relationEnds
+}
+
+type relationEnds struct {
+	fromTable, fromColumn, toTable, toColumn string
+}
+
+// linkColumn returns the column of table a that links it to table b, the
+// same relation query.ResolveIncludes picks.
+func (v *validator) linkColumn(a, b string) (string, bool) {
+	for _, r := range v.relations {
+		if r.fromTable == a && r.toTable == b {
+			return r.fromColumn, true
+		}
+		if r.fromTable == b && r.toTable == a {
+			return r.toColumn, true
+		}
+	}
+	return "", false
 }
 
 func (v *validator) errorf(path, format string, args ...any) {
@@ -196,6 +217,11 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 	for i, r := range asSlice(schema["relations"]) {
 		path := fmt.Sprintf("schema.relations[%d]", i)
 		rm := asMap(r)
+		from, to := asMap(rm["from"]), asMap(rm["to"])
+		v.relations = append(v.relations, relationEnds{
+			fromTable: fmt.Sprint(from["table"]), fromColumn: fmt.Sprint(from["column"]),
+			toTable: fmt.Sprint(to["table"]), toColumn: fmt.Sprint(to["column"]),
+		})
 		for _, end := range []string{"from", "to"} {
 			em := asMap(rm[end])
 			table, _ := em["table"].(string)
@@ -266,14 +292,71 @@ func (v *validator) functionsSection(fns map[string]any) {
 			if !strings.HasPrefix(rp, "/fn/") {
 				v.errorf(path+".route.path", "must start with /fn/ (got %q)", rp)
 			}
-			key := method + " " + rp
+			if _, err := pipeline.RouteParams(rp); err != nil {
+				v.errorf(path+".route.path", "%v", err)
+			}
+			key := method + " " + pipeline.RouteShape(rp)
 			if other, dup := routes[key]; dup {
 				v.errorf(path+".route", "%s is also served by function %q", key, other)
 			}
 			routes[key] = name
 		}
-		v.steps(path+".steps", asSlice(fm["steps"]), false)
+		v.input(path+".route.input", asMap(route["input"]))
+		v.steps(path+".steps", asSlice(fm["steps"]), stepScope{})
 	}
+}
+
+func (v *validator) input(path string, input map[string]any) {
+	for name, raw := range input {
+		p := path + "." + name
+		if !identRe.MatchString(name) {
+			v.errorf(p, "%q is not a valid field name", name)
+		}
+		f, ok := raw.(map[string]any)
+		if !ok {
+			v.errorf(p, "must be an object like {\"type\": \"string\"}")
+			continue
+		}
+		typ, _ := f["type"].(string)
+		if !pipeline.InputTypes[typ] {
+			v.errorf(p+".type", "unknown type %q (valid: %s)", f["type"], keys(pipeline.InputTypes))
+		}
+		if pat, ok := f["pattern"].(string); ok {
+			if _, err := regexp.Compile(pat); err != nil {
+				v.errorf(p+".pattern", "invalid regular expression: %v", err)
+			}
+			if typ != "string" {
+				v.errorf(p+".pattern", "only applies to strings")
+			}
+		}
+		if format, ok := f["format"].(string); ok {
+			if !pipeline.InputFormats[format] {
+				v.errorf(p+".format", "unknown format %q (valid: %s)", format, keys(pipeline.InputFormats))
+			}
+			if typ != "string" {
+				v.errorf(p+".format", "only applies to strings")
+			}
+		}
+		minV, hasMin := f["min"].(float64)
+		maxV, hasMax := f["max"].(float64)
+		if (hasMin || hasMax) && typ != "string" && typ != "number" && typ != "integer" && typ != "array" {
+			v.errorf(p, "min/max only apply to string, number, integer and array")
+		}
+		if hasMin && hasMax && minV > maxV {
+			v.errorf(p, "min is greater than max")
+		}
+		if e, ok := f["enum"]; ok && len(asSlice(e)) == 0 {
+			v.errorf(p+".enum", "must be a non-empty array")
+		}
+		if f["required"] == true && f["default"] != nil {
+			v.warnf(p, "a required field with a default never fails; drop one of them")
+		}
+	}
+}
+
+// stepScope is where a list of steps runs.
+type stepScope struct {
+	inCron, inTx bool
 }
 
 func (v *validator) cronjobs(jobs map[string]any) {
@@ -289,11 +372,12 @@ func (v *validator) cronjobs(jobs map[string]any) {
 		if _, err := parser.Parse(sched); err != nil {
 			v.errorf(path+".schedule", "invalid cron expression %q: %v", sched, err)
 		}
-		v.steps(path+".steps", asSlice(jm["steps"]), true)
+		v.steps(path+".steps", asSlice(jm["steps"]), stepScope{inCron: true})
 	}
 }
 
-func (v *validator) steps(path string, steps []any, inCron bool) {
+func (v *validator) steps(path string, steps []any, scope stepScope) {
+	inCron := scope.inCron
 	if len(steps) == 0 {
 		v.warnf(path, "no steps")
 	}
@@ -317,12 +401,15 @@ func (v *validator) steps(path string, steps []any, inCron bool) {
 				}
 			}
 		}
+		if scope.inTx && !pipeline.StepAllowedInTransaction(typ) {
+			v.errorf(p, "%s is not allowed inside a transaction (it can't be rolled back); move it after the transaction step", typ)
+		}
 		if a := str("assign"); a != "" && !assignRe.MatchString(a) {
 			v.errorf(p+".assign", "%q is not a valid variable name", a)
 		}
 
 		switch typ {
-		case "db.select", "db.insert", "db.update", "db.delete":
+		case "db.select", "db.aggregate", "db.insert", "db.update", "db.delete":
 			require("table")
 			table := str("table")
 			cols, ok := v.tables[table]
@@ -343,6 +430,9 @@ func (v *validator) steps(path string, steps []any, inCron bool) {
 					}
 				}
 			}
+			if typ == "db.select" || typ == "db.aggregate" {
+				v.selectOptions(p, sm, table, cols, ok)
+			}
 			if typ == "db.insert" || typ == "db.update" {
 				require("data")
 			}
@@ -353,13 +443,32 @@ func (v *validator) steps(path string, steps []any, inCron bool) {
 			}
 		case "if":
 			require("condition")
-			v.steps(p+".then", asSlice(sm["then"]), inCron)
+			v.steps(p+".then", asSlice(sm["then"]), scope)
 			if e := asSlice(sm["else"]); len(e) > 0 {
-				v.steps(p+".else", e, inCron)
+				v.steps(p+".else", e, scope)
 			}
 		case "foreach":
 			require("items", "as")
-			v.steps(p+".steps", asSlice(sm["steps"]), inCron)
+			v.steps(p+".steps", asSlice(sm["steps"]), scope)
+		case "transaction":
+			inner := scope
+			inner.inTx = true
+			v.steps(p+".steps", asSlice(sm["steps"]), inner)
+		case "try":
+			v.steps(p+".steps", asSlice(sm["steps"]), scope)
+			if c := asSlice(sm["catch"]); len(c) > 0 {
+				v.steps(p+".catch", c, scope)
+			}
+			if a := str("as"); a != "" && !assignRe.MatchString(a) {
+				v.errorf(p+".as", "%q is not a valid variable name", a)
+			}
+		case "fail":
+			if code, ok := sm["status_code"].(float64); ok && (code < 400 || code > 599) {
+				v.errorf(p+".status_code", "must be between 400 and 599")
+			}
+			if inCron {
+				v.warnf(p, "fail in a cronjob only stops the job and logs the message")
+			}
 		case "set_variable":
 			require("assign")
 		case "transform.sum", "transform.count", "transform.filter":
@@ -408,6 +517,106 @@ func (v *validator) steps(path string, steps []any, inCron bool) {
 		case "response":
 			if inCron {
 				v.warnf(p, "response steps are a no-op in cronjobs")
+			}
+		}
+	}
+}
+
+// selectOptions checks db.select / db.aggregate ordering, paging, include
+// and aggregate fields. known reports whether the table exists.
+func (v *validator) selectOptions(p string, sm map[string]any, table string, cols map[string]bool, known bool) {
+	typ, _ := sm["type"].(string)
+	outputs := cols
+	if typ == "db.aggregate" {
+		outputs = map[string]bool{}
+		aggs := asMap(sm["aggregates"])
+		if len(aggs) == 0 {
+			v.errorf(p+".aggregates", "db.aggregate requires \"aggregates\", e.g. {\"total\": \"sum:amount\"}")
+		}
+		for alias, spec := range aggs {
+			if !identRe.MatchString(alias) {
+				v.errorf(p+".aggregates."+alias, "%q is not a valid alias", alias)
+			}
+			s, _ := spec.(string)
+			_, col, err := pipeline.ParseAggregate(s)
+			if err != nil {
+				v.errorf(p+".aggregates."+alias, "%v", err)
+			} else if known && col != "" && !cols[col] {
+				v.errorf(p+".aggregates."+alias, "unknown column %q in table %q", col, table)
+			}
+			outputs[alias] = true
+		}
+		for _, g := range asSlice(sm["group_by"]) {
+			gs, _ := g.(string)
+			if known && !cols[gs] {
+				v.errorf(p+".group_by", "unknown column %q in table %q", g, table)
+			}
+			outputs[gs] = true
+		}
+	} else {
+		for _, field := range []string{"group_by", "aggregates"} {
+			if sm[field] != nil {
+				v.errorf(p+"."+field, "only db.aggregate supports %q", field)
+			}
+		}
+	}
+
+	var orders []any
+	switch o := sm["order_by"].(type) {
+	case string:
+		orders = []any{o}
+	case []any:
+		orders = o
+	case nil:
+	default:
+		v.errorf(p+".order_by", "must be a string or an array of strings")
+	}
+	for _, o := range orders {
+		os, _ := o.(string)
+		col, _, err := pipeline.ParseOrderBy(os)
+		if err != nil {
+			v.errorf(p+".order_by", "%v", err)
+		} else if known && !outputs[col] {
+			v.errorf(p+".order_by", "unknown column %q", col)
+		}
+	}
+
+	for _, field := range []string{"limit", "offset"} {
+		switch n := sm[field].(type) {
+		case nil, string:
+		case float64:
+			if n < 0 || n != float64(int(n)) {
+				v.errorf(p+"."+field, "must be a non-negative integer")
+			}
+		default:
+			v.errorf(p+"."+field, "must be a number or a {{template}}")
+		}
+	}
+
+	for i, inc := range asSlice(sm["include"]) {
+		ip := fmt.Sprintf("%s.include[%d]", p, i)
+		if typ != "db.select" {
+			v.errorf(ip, "only db.select supports include")
+			break
+		}
+		im := asMap(inc)
+		rel, _ := im["table"].(string)
+		relCols, relOK := v.tables[rel]
+		if !relOK {
+			v.errorf(ip+".table", "unknown table %q", rel)
+			continue
+		}
+		if known {
+			link, ok := v.linkColumn(table, rel)
+			if !ok {
+				v.errorf(ip+".table", "no relation between %q and %q", table, rel)
+			} else if selected := asSlice(sm["columns"]); len(selected) > 0 && !slices.Contains(selected, any(link)) {
+				v.errorf(p+".columns", "including %q needs the link column %q in columns", rel, link)
+			}
+		}
+		for _, c := range asSlice(im["columns"]) {
+			if cs, _ := c.(string); !relCols[cs] {
+				v.errorf(ip+".columns", "unknown column %q in table %q", c, rel)
 			}
 		}
 	}

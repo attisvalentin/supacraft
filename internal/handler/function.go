@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/attisvalentin/supacraft/internal/middleware"
 	"github.com/attisvalentin/supacraft/internal/pipeline"
@@ -19,20 +18,7 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := middleware.TenantFromContext(r.Context())
 
-		// Extract the function path from the URL
-		fnPath := r.URL.Path
-
-		// Match against tenant's function routes
-		var matchedFunc *tenant.Function
-		var matchedFuncID string
-		for fnID, fn := range cfg.Functions {
-			if fn.Route.Path == fnPath && strings.EqualFold(fn.Route.Method, r.Method) {
-				f := fn
-				matchedFunc = &f
-				matchedFuncID = fnID
-				break
-			}
-		}
+		matchedFuncID, matchedFunc, pathParams := pipeline.MatchFunction(cfg.Functions, r.Method, r.URL.EscapedPath())
 		if matchedFunc == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
@@ -69,9 +55,17 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 			})
 		}
 
+		if len(pathParams) > 0 {
+			params := make(map[string]any, len(pathParams))
+			for k, v := range pathParams {
+				params[k] = v
+			}
+			pCtx.Set("params", params)
+		}
+
 		// Request body (for POST/PUT/PATCH)
+		var body map[string]any
 		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
-			var body map[string]any
 			dec := json.NewDecoder(r.Body)
 			err := dec.Decode(&body)
 			if err == nil {
@@ -111,16 +105,28 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 			}
 		} else {
 			// Backward compat: inject all URL query params for functions without url_params
-			for key, values := range r.URL.Query() {
-				if len(values) == 1 {
-					queryParams[key] = values[0]
-				} else {
-					anyValues := make([]any, len(values))
-					for i, v := range values {
-						anyValues[i] = v
+			queryParams = allQueryParams(r)
+		}
+		if input := matchedFunc.Route.Input; len(input) > 0 {
+			fromQuery := r.Method == http.MethodGet
+			data := body
+			if fromQuery {
+				data = allQueryParams(r)
+				for k, def := range matchedFunc.Route.URLParams {
+					if v, sent := data[k]; (!sent || v == "") && def != "" {
+						data[k] = def
 					}
-					queryParams[key] = anyValues
 				}
+			}
+			clean, fieldErrs := pipeline.ValidateInput(input, data, fromQuery)
+			if fieldErrs != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid input", "fields": fieldErrs})
+				return
+			}
+			if fromQuery {
+				queryParams = clean
+			} else {
+				pCtx.Set("request", clean)
 			}
 		}
 		if len(queryParams) > 0 {
@@ -156,6 +162,16 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 		if errors.Is(err, pipeline.ErrResponseSent) {
 			return // Response already written by the response step
 		}
+		var fail *pipeline.FailError
+		if errors.As(err, &fail) {
+			out := map[string]any{}
+			for k, v := range fail.Data {
+				out[k] = v
+			}
+			out["error"] = fail.Message
+			writeJSON(w, fail.Status, out)
+			return
+		}
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("pipeline execution failed: %v", err))
 			return
@@ -164,4 +180,21 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 		// No response step was executed
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// allQueryParams returns the query string as a map; repeated keys become arrays.
+func allQueryParams(r *http.Request) map[string]any {
+	out := make(map[string]any)
+	for key, values := range r.URL.Query() {
+		if len(values) == 1 {
+			out[key] = values[0]
+		} else {
+			anyValues := make([]any, len(values))
+			for i, v := range values {
+				anyValues[i] = v
+			}
+			out[key] = anyValues
+		}
+	}
+	return out
 }

@@ -25,7 +25,7 @@ var ErrIncludeForbidden = fmt.Errorf("included table is not accessible")
 
 func ResolveIncludes(
 	ctx context.Context,
-	dbPool *tenant.DB,
+	dbPool tenant.Querier,
 	mainTableUUID string,
 	mainResults []map[string]any,
 	includes []IncludeRequest,
@@ -64,6 +64,11 @@ func ResolveIncludes(
 		mainTable, _ := schema.FindTable(sch, mainTableUUID)
 		if _, err := schema.FindColumn(mainTable, mainColName); err != nil {
 			return fmt.Errorf("relation column not found in main table: %s", mainColName)
+		}
+		if len(mainResults) > 0 {
+			if _, selected := mainResults[0][mainColName]; !selected {
+				return fmt.Errorf("including %s needs column %s in the selected columns", relatedTable.Name, mainColName)
+			}
 		}
 		if _, err := schema.FindColumn(relatedTable, relatedColName); err != nil {
 			return fmt.Errorf("relation column not found in related table: %s", relatedColName)

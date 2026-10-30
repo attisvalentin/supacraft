@@ -227,6 +227,41 @@ A path (`"https://example.com/app"`) or an array is **invalid** — validation r
 - `PRIVATE` functions are only callable via `function.call`, not via HTTP
 - `url_params`: optional, GET only. Key = param name, value = default (empty = required). Omit for unrestricted params.
 
+### Path parameters
+
+A whole path segment written as `{name}` matches any non-empty value and is available as `{{params.name}}` (URL-decoded, always a string):
+
+```json
+{ "route": { "path": "/fn/posts/{id}/comments", "method": "GET" } }
+```
+
+A literal segment beats a parameter, so `/fn/posts/latest` is served by its own function even when `/fn/posts/{id}` exists. Two routes that differ only in parameter names (`/fn/posts/{id}` and `/fn/posts/{slug}`) are the same route and rejected by validation.
+
+### Input validation
+
+`route.input` declares the accepted fields. Requests that don't match get `400 {"error": "invalid input", "fields": {"title": "is required"}}` before any step runs.
+
+```json
+"route": {
+  "path": "/fn/orders", "method": "POST",
+  "input": {
+    "product_id": { "type": "string", "format": "uuid", "required": true },
+    "qty":        { "type": "integer", "min": 1, "max": 100, "required": true },
+    "note":       { "type": "string", "max": 500 },
+    "channel":    { "type": "string", "enum": ["web", "app"], "default": "web" }
+  }
+}
+```
+
+- Validates the JSON body (`request.*`) for POST/PUT/PATCH/DELETE and the query string (`query.*`) for GET
+- `type`: `string | number | integer | boolean | object | array | any`
+- `required`, `default` (filled in when the field is missing)
+- `min` / `max`: string length, number value, or array length
+- `pattern` (regular expression, strings only), `format`: `email | uuid | date | datetime | url`, `enum`
+- **Body:** a field that isn't declared is rejected (`"unknown field"`), so clients can't slip extra columns into a `db.insert` that writes `{{request}}`
+- **Query string:** values are converted to the declared type (`?page=2` → number 2, `?tag=a&tag=b` → array); undeclared parameters are dropped. `url_params` defaults still apply
+- Prefer `input` over checking fields with `if` steps
+
 ---
 
 ## Cronjob
@@ -265,15 +300,40 @@ Cron context: only `env.*` and `now` available. No `auth.*`, `request.*`, `query
 ```json
 {
   "type": "db.select",
-  "table": "users",
-  "columns": ["id", "email", "name"],
-  "where": { "id": "{{auth.user_id}}", "status": { "$eq": "active" } },
-  "assign": "user"
+  "table": "posts",
+  "columns": ["id", "title", "created_at"],
+  "where": { "author_id": "{{auth.user_id}}", "status": { "$eq": "published" } },
+  "order_by": ["created_at desc", "title"],
+  "limit": "{{query.page_size}}",
+  "offset": 0,
+  "include": [ { "table": "comments", "columns": ["id", "body"] } ],
+  "assign": "posts"
 }
 ```
 - `columns`: optional, omit for all columns
 - `where`: optional filter (same operators as CRUD API)
-- `assign`: stores result array (or single object if one row matched by id)
+- `order_by`: `"column"` or `"column desc"`, a string or an array (first sorts first)
+- `limit` / `offset`: number or template resolving to a non-negative integer
+- `include`: attaches related rows (needs a relation between the tables) under each row's `<table>` key, e.g. `posts[0].comments`. `columns` defaults to the related table's readable columns. If you list `columns` on the step itself, include the link column (e.g. `id` for posts → comments)
+- `single: true`: assigns the first row as an object, or `null` when nothing matched (use for "get by id")
+- `assign`: stores the result array (or one object/null with `single`)
+
+### db.aggregate
+```json
+{
+  "type": "db.aggregate",
+  "table": "orders",
+  "where": { "status": "paid" },
+  "group_by": ["user_id"],
+  "aggregates": { "orders": "count", "revenue": "sum:total", "biggest": "max:total" },
+  "order_by": "revenue desc",
+  "limit": 10,
+  "assign": "top_customers"
+}
+```
+- `aggregates`: alias → `count` | `count:column` | `sum:column` | `avg:column` | `min:column` | `max:column`. `sum` of no rows is `0`
+- `group_by`: optional; with it, `assign` gets one row per group (group columns + aliases), without it a single object (`{ "orders": 12, "revenue": 340.5, ... }`)
+- `order_by` may use aliases and group columns; `where`, `limit`, `offset` as in db.select
 
 ### db.insert
 ```json
@@ -327,6 +387,55 @@ Assigns `{ "deleted": N }`.
 }
 ```
 Max 1000 iterations.
+
+### transaction
+```json
+{
+  "type": "transaction",
+  "steps": [
+    { "type": "db.insert", "table": "orders", "data": { "product_id": "{{request.product_id}}", "qty": "{{request.qty}}" }, "assign": "order" },
+    { "type": "db.select", "table": "products", "where": { "id": "{{request.product_id}}" }, "single": true, "assign": "product" },
+    { "type": "if", "condition": "{{product.stock}} < {{request.qty}}", "then": [
+      { "type": "fail", "status_code": 409, "message": "out of stock" }
+    ] },
+    { "type": "transform.math", "expression": "{{product.stock}} - {{request.qty}}", "assign": "left" },
+    { "type": "db.update", "table": "products", "where": { "id": "{{request.product_id}}" }, "data": { "stock": "{{left}}" } }
+  ]
+}
+```
+- All database steps inside run atomically: if any step fails (including `fail`), every write inside is rolled back. A `try` inside can catch a failure; only that try's writes are undone then
+- Variables assigned inside stay available after the transaction
+- `http.request`, `email.send` and `response` are not allowed inside (they can't be rolled back); put them after the transaction
+- The database is locked for the duration, so keep transactions short
+- Nested transactions (also through `function.call`) join the outer one
+
+### fail
+```json
+{ "type": "fail", "status_code": 403, "message": "you can only edit your own posts", "data": { "post_id": "{{params.id}}" } }
+```
+- Stops the function and responds with `status_code` (400–599, default 400) and `{ "error": message, ...data }`
+- `message` and `data` support templates
+- Rolls back an enclosing transaction; a surrounding `try` catches it
+- In a cronjob it stops the job and logs the message
+
+### try
+```json
+{
+  "type": "try",
+  "as": "err",
+  "steps": [
+    { "type": "http.request", "url": "https://api.example.com/sync", "method": "POST", "assign": "sync" }
+  ],
+  "catch": [
+    { "type": "set_variable", "assign": "sync", "value": null }
+  ]
+}
+```
+- If a step in `steps` fails, runs `catch` (optional) and continues after the try
+- Inside a `transaction`, the database writes of a failed `steps` block are undone (the rest of the transaction is kept)
+- The error is available as `{{err.message}}`, `{{err.status}}`, `{{err.data}}` (`as` defaults to `error`)
+- For `fail` errors, `message`/`status`/`data` are the fail step's. For anything else, `message` is `"internal error"`, `status` is 500, and `{{err.detail}}` has the full error text — don't return `detail` to clients (it can contain SQL or upstream details)
+- A `response` inside `steps` is not an error and ends the function as usual
 
 ### set_variable
 ```json
@@ -459,6 +568,7 @@ Called function receives args as `{{args.user_id}}`, `{{args.amount}}`. Max recu
 | `auth.email` | Yes (auth_required: true) | No |
 | `request.*` | Yes POST/PUT/PATCH | No |
 | `query.*` | Yes | No |
+| `params.*` | Yes (path parameters) | No |
 | `env.*` | Yes | Yes |
 
 ---
@@ -776,6 +886,9 @@ curl -X POST http://localhost:8080/fn/create-order \
 - `auth_required: true` → must include JWT
 - POST/PUT/PATCH body → available as `request.*` in pipeline context
 - URL query params → available as `query.*` in pipeline context
+- Path parameters (`/fn/posts/{id}`) → available as `params.*`
+- `route.input` failures → `400 {"error": "invalid input", "fields": {...}}`
+- `fail` steps → their `status_code` with `{"error": "<message>", ...data}`
 
 ---
 

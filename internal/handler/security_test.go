@@ -68,8 +68,14 @@ type testAPI struct {
 
 func newTestAPI(t *testing.T) *testAPI {
 	t.Helper()
+	return newTestAPIWith(t, securityProject)
+}
+
+// newTestAPIWith applies projectJSON to a fresh data dir and serves it.
+func newTestAPIWith(t *testing.T, projectJSON string) *testAPI {
+	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, project.FileName), []byte(securityProject), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, project.FileName), []byte(projectJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	p, err := project.Load(dir)
