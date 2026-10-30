@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/attisvalentin/supacraft/internal/query"
 )
 
 // BuildWhereRaw builds a parameterized WHERE clause without schema validation.
@@ -22,7 +24,7 @@ func BuildWhereRaw(where map[string]any, paramOffset int) (string, []any, error)
 	var args []any
 
 	for colName, value := range where {
-		quotedCol := fmt.Sprintf("%q", colName)
+		quotedCol := query.QuoteIdent(colName)
 
 		opMap, isOp := value.(map[string]any)
 		if !isOp {

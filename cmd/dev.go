@@ -17,6 +17,8 @@ import (
 var (
 	servePort   string
 	serveNoCron bool
+	devHost     string
+	serveHost   string
 )
 
 var devCmd = &cobra.Command{
@@ -36,6 +38,10 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
+	// dev is for one machine, so it stays off the network unless asked;
+	// serve is the production entry point and listens on all interfaces.
+	devCmd.Flags().StringVar(&devHost, "host", envOr("HOST", "127.0.0.1"), "interface to listen on (0.0.0.0 = all)")
+	serveCmd.Flags().StringVar(&serveHost, "host", envOr("HOST", "0.0.0.0"), "interface to listen on")
 	for _, c := range []*cobra.Command{devCmd, serveCmd} {
 		c.Flags().StringVarP(&servePort, "port", "p", envOr("PORT", "8080"), "HTTP port")
 		c.Flags().BoolVar(&serveNoCron, "no-cron", false, "don't run cron jobs")
@@ -55,7 +61,11 @@ func runServer(watch bool) error {
 		fmt.Fprintf(os.Stderr, "✗ %v\n  (fix supacraft.json — it is re-applied on save)\n", err)
 	}
 
-	cfg, err := serverConfig(p, servePort)
+	host := serveHost
+	if watch {
+		host = devHost
+	}
+	cfg, err := serverConfig(p, host, servePort)
 	if err != nil {
 		return err
 	}

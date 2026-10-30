@@ -74,7 +74,7 @@ func ExecuteDBInsert(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		return fmt.Errorf("db.insert: last_insert_rowid: %w", err)
 	}
 
-	selectSQL := fmt.Sprintf("SELECT * FROM %q WHERE rowid = ?", table.Name)
+	selectSQL := "SELECT * FROM " + query.QuoteIdent(table.Name) + " WHERE rowid = ?"
 	rows, err := deps.DBPool.Query(ctx, selectSQL, lastID)
 	if err != nil {
 		return fmt.Errorf("db.insert: select inserted: %w", err)
@@ -179,12 +179,27 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	return nil
 }
 
-// resolveWhereMap resolves {{...}} references in where clause values.
+// resolveWhereMap resolves {{...}} references in where clause values. A
+// column compared to a template must resolve to a plain value: if
+// {"id": "{{request.id}}"} could resolve to {"$ne": ""}, a client would turn
+// an equality check into an operator and match every row.
 func resolveWhereMap(where map[string]any, pCtx *PipelineContext) (map[string]any, error) {
 	if len(where) == 0 {
 		return where, nil
 	}
-	return ResolveMap(where, pCtx)
+	resolved, err := ResolveMap(where, pCtx)
+	if err != nil {
+		return nil, err
+	}
+	for col, v := range where {
+		if _, isTemplate := v.(string); !isTemplate {
+			continue
+		}
+		if _, isObject := resolved[col].(map[string]any); isObject {
+			return nil, fmt.Errorf("where.%s: value must be a string, number, boolean or null, not an object", col)
+		}
+	}
+	return resolved, nil
 }
 
 func allColumnNames(table *tenant.SchemaTable) []string {

@@ -46,10 +46,12 @@ func HasErrors(issues []Issue) bool {
 }
 
 var (
-	identRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
-	envKeyRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	assignRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	columnTypes = setOf("primary", "uuid", "int", "bigint", "smallint", "tinyint", "bigserial",
+	identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
+	// privilegedColumn flags users columns that usually grant access.
+	privilegedColumn = regexp.MustCompile(`(?i)^(is_)?(admin|role|roles|permissions?|staff|superuser|verified|plan|tier|credits?|balance)$`)
+	envKeyRe         = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	assignRe         = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	columnTypes      = setOf("primary", "uuid", "int", "bigint", "smallint", "tinyint", "bigserial",
 		"decimal", "numeric", "real", "double", "float", "varchar", "char", "text", "boolean",
 		"timestamp", "timestamptz", "date", "time", "interval", "json", "jsonb", "bytea",
 		"blob", "binary", "enum")
@@ -178,6 +180,11 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 			}
 			if strings.EqualFold(ctype, "enum") && len(asSlice(cm["enum_values"])) == 0 {
 				v.errorf(cpath+".enum_values", "enum column %q needs enum_values", cname)
+			}
+			if authEnabled && name == "users" && privilegedColumn.MatchString(cname) {
+				if c, set := cm["creatable"].(bool); !set || c {
+					v.warnf(cpath+".creatable", "users.%s looks like a permission; anyone can set it at /auth/register unless it has \"creatable\": false (and \"updatable\": false)", cname)
+				}
 			}
 		}
 	}

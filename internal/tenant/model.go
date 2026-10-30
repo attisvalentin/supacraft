@@ -111,8 +111,19 @@ func (a AuthEndpoints) RefreshEnabled() bool {
 // AuthSettings holds configurable JWT lifetimes (seconds). nil/≤0 values
 // fall back to the historical defaults so existing tenants are unaffected.
 type AuthSettings struct {
-	AccessTokenTTL  *int `json:"access_token_ttl,omitempty"`
-	RefreshTokenTTL *int `json:"refresh_token_ttl,omitempty"`
+	AccessTokenTTL    *int `json:"access_token_ttl,omitempty"`
+	RefreshTokenTTL   *int `json:"refresh_token_ttl,omitempty"`
+	PasswordMinLength *int `json:"password_min_length,omitempty"`
+}
+
+const defaultPasswordMinLength = 8
+
+// MinPasswordLength returns the minimum password length for registration.
+func (a AuthSettings) MinPasswordLength() int {
+	if a.PasswordMinLength == nil || *a.PasswordMinLength <= 0 {
+		return defaultPasswordMinLength
+	}
+	return *a.PasswordMinLength
 }
 
 const (

@@ -40,6 +40,9 @@ func (s *FileStore) tenantPath(tenantID string) string {
 
 // GetTenantConfig reads {DataDir}/tenants/{tenantID}.json from disk.
 func (s *FileStore) GetTenantConfig(ctx context.Context, tenantID string) (*TenantConfig, error) {
+	if tenantID == "" || strings.ContainsAny(tenantID, `/\.`) {
+		return nil, ErrTenantNotFound
+	}
 	data, err := os.ReadFile(s.tenantPath(tenantID))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrTenantNotFound

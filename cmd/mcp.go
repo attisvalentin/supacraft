@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 
 var (
 	mcpPort    string
+	mcpHost    string
 	mcpNoServe bool
 )
 
@@ -44,11 +46,11 @@ Register it with your agent, e.g. in .mcp.json (supacraft init does this):
 
 		opts := mcpserver.Options{
 			Dir:     p.Dir,
-			APIURL:  "http://localhost:" + mcpPort,
+			APIURL:  "http://" + net.JoinHostPort(dialHost(mcpHost), mcpPort),
 			Version: appVersion,
 		}
 		if !mcpNoServe {
-			cfg, err := serverConfig(p, mcpPort)
+			cfg, err := serverConfig(p, mcpHost, mcpPort)
 			if err != nil {
 				return err
 			}
@@ -64,7 +66,16 @@ Register it with your agent, e.g. in .mcp.json (supacraft init does this):
 	},
 }
 
+// dialHost is the address to reach a server listening on host.
+func dialHost(host string) string {
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "127.0.0.1"
+	}
+	return host
+}
+
 func init() {
+	mcpCmd.Flags().StringVar(&mcpHost, "host", envOr("HOST", "127.0.0.1"), "interface the API listens on (0.0.0.0 = all)")
 	mcpCmd.Flags().StringVarP(&mcpPort, "port", "p", envOr("PORT", "8080"), "HTTP port of the API")
 	mcpCmd.Flags().BoolVar(&mcpNoServe, "no-serve", false, "don't start the API in-process")
 	rootCmd.AddCommand(mcpCmd)

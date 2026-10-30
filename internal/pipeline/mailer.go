@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"mime"
 	"mime/multipart"
 	"net"
 	"net/mail"
@@ -199,6 +200,13 @@ func (m *SMTPMailer) connect(ctx context.Context, host, addr, encryption string)
 	}
 }
 
+// headerSafe removes line breaks from a header value. Subjects are often
+// built from request data, and a CR/LF there would let a client append its
+// own headers (e.g. Bcc) to the message.
+func headerSafe(v string) string {
+	return strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(v)
+}
+
 func buildSMTPMessage(msg MailMessage) ([]byte, error) {
 	if strings.TrimSpace(msg.FromEmail) == "" {
 		return nil, errors.New("from email is required")
@@ -209,7 +217,7 @@ func buildSMTPMessage(msg MailMessage) ([]byte, error) {
 	headers := map[string]string{
 		"From":         fromAddr.String(),
 		"To":           strings.Join(msg.To, ", "),
-		"Subject":      msg.Subject,
+		"Subject":      mime.QEncoding.Encode("utf-8", msg.Subject),
 		"MIME-Version": "1.0",
 		"Date":         time.Now().UTC().Format(time.RFC1123Z),
 	}
@@ -227,7 +235,7 @@ func buildSMTPMessage(msg MailMessage) ([]byte, error) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		fmt.Fprintf(&b, "%s: %s\r\n", k, headers[k])
+		fmt.Fprintf(&b, "%s: %s\r\n", k, headerSafe(headers[k]))
 	}
 
 	hasHTML := strings.TrimSpace(msg.HTMLBody) != ""

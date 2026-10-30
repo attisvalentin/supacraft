@@ -11,10 +11,10 @@ import (
 func BuildSelect(tableName string, columns []string, whereSql string, whereArgs []any, orderBySql string, paginationSql string, paginationArgs []any) (string, []any) {
 	quoted := make([]string, len(columns))
 	for i, c := range columns {
-		quoted[i] = fmt.Sprintf("%q", c)
+		quoted[i] = QuoteIdent(c)
 	}
 
-	sql := fmt.Sprintf("SELECT %s FROM %q", strings.Join(quoted, ", "), tableName)
+	sql := fmt.Sprintf("SELECT %s FROM %s", strings.Join(quoted, ", "), QuoteIdent(tableName))
 	args := whereArgs
 
 	if whereSql != "" {
@@ -29,7 +29,7 @@ func BuildSelect(tableName string, columns []string, whereSql string, whereArgs 
 }
 
 func BuildCount(tableName string, whereSql string, whereArgs []any) (string, []any) {
-	sql := fmt.Sprintf("SELECT COUNT(*) FROM %q", tableName)
+	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s", QuoteIdent(tableName))
 	if whereSql != "" {
 		sql += " WHERE " + whereSql
 	}
@@ -47,12 +47,11 @@ func BuildInsert(tableName string, data map[string]any) (string, []any) {
 	placeholders := make([]string, len(cols))
 	args := make([]any, len(cols))
 	for i, col := range cols {
-		quoted[i] = fmt.Sprintf("%q", col)
+		quoted[i] = QuoteIdent(col)
 		placeholders[i] = "?"
 		args[i] = data[col]
 	}
-	sql := fmt.Sprintf("INSERT INTO %q (%s) VALUES (%s)",
-		tableName, strings.Join(quoted, ", "), strings.Join(placeholders, ", "))
+	sql := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", QuoteIdent(tableName), strings.Join(quoted, ", "), strings.Join(placeholders, ", "))
 	return sql, args
 }
 
@@ -65,11 +64,11 @@ func BuildUpdate(tableName string, data map[string]any, whereSql string, whereAr
 	setClauses := make([]string, len(cols))
 	setArgs := make([]any, len(cols))
 	for i, col := range cols {
-		setClauses[i] = fmt.Sprintf("%q = ?", col)
+		setClauses[i] = fmt.Sprintf("%s = ?", QuoteIdent(col))
 		setArgs[i] = data[col]
 	}
 
-	sql := fmt.Sprintf("UPDATE %q SET %s", tableName, strings.Join(setClauses, ", "))
+	sql := fmt.Sprintf("UPDATE %s SET %s", QuoteIdent(tableName), strings.Join(setClauses, ", "))
 	if whereSql != "" {
 		sql += " WHERE " + whereSql
 	}
@@ -79,7 +78,7 @@ func BuildUpdate(tableName string, data map[string]any, whereSql string, whereAr
 }
 
 func BuildDelete(tableName string, whereSql string, whereArgs []any) (string, []any) {
-	sql := fmt.Sprintf("DELETE FROM %q", tableName)
+	sql := fmt.Sprintf("DELETE FROM %s", QuoteIdent(tableName))
 	if whereSql != "" {
 		sql += " WHERE " + whereSql
 	}
@@ -106,7 +105,7 @@ func BuildOrderBy(orderBy map[string]string, table *tenant.SchemaTable) (string,
 			return "", fmt.Errorf("invalid order direction: %s (must be asc or desc)", direction)
 		}
 
-		clauses = append(clauses, fmt.Sprintf("%q %s", colName, dir))
+		clauses = append(clauses, fmt.Sprintf("%s %s", QuoteIdent(colName), dir))
 	}
 
 	return " ORDER BY " + strings.Join(clauses, ", "), nil

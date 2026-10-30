@@ -19,7 +19,8 @@ var authUserColumns = []map[string]any{
 	{"name": "id", "type": "uuid", "readable": true, "creatable": false, "updatable": false},
 	{"name": "email", "type": "varchar"},
 	{"name": "password", "type": "varchar", "readable": false, "creatable": true, "updatable": true},
-	{"name": "is_active", "type": "boolean"},
+	// Clients must not activate themselves; flip it from a function or cron.
+	{"name": "is_active", "type": "boolean", "creatable": false, "updatable": false},
 	{"name": "created_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 	{"name": "updated_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 }
