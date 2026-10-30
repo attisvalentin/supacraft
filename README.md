@@ -74,7 +74,7 @@ Your `supacraft.json` is never left in a broken state.
 
 ## Quick start
 
-**Install** (Go 1.25+, or grab a binary from [Releases](https://github.com/attisvalentin/supacraft/releases)):
+**Install** (Go 1.26+, or grab a binary from [Releases](https://github.com/attisvalentin/supacraft/releases)):
 
 ```bash
 go install github.com/attisvalentin/supacraft@latest
