@@ -93,6 +93,8 @@ func (p *Project) Validate() []Issue {
 
 	if strings.TrimSpace(p.Name()) == "" {
 		v.errorf("name", "project name is required")
+	} else if id := p.TenantID(); len(id) > MaxTenantIDLength {
+		v.errorf("name", "too long: its id %q must be at most %d characters", id, MaxTenantIDLength)
 	}
 	for _, key := range []string{"schema", "api_settings", "functions", "cronjobs"} {
 		if val, ok := raw[key]; ok && val != nil {
@@ -183,7 +185,10 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 			}
 			if authEnabled && name == "users" && privilegedColumn.MatchString(cname) {
 				if c, set := cm["creatable"].(bool); !set || c {
-					v.warnf(cpath+".creatable", "users.%s looks like a permission; anyone can set it at /auth/register unless it has \"creatable\": false (and \"updatable\": false)", cname)
+					v.warnf(cpath+".creatable", "users.%s looks like a permission; anyone can set it at /auth/register unless it has \"creatable\": false", cname)
+				}
+				if u, set := cm["updatable"].(bool); !set || u {
+					v.warnf(cpath+".updatable", "users.%s looks like a permission; clients can change it through /update unless it has \"updatable\": false", cname)
 				}
 			}
 		}
@@ -225,6 +230,9 @@ func (v *validator) apiSettings(s map[string]any) {
 		if d, _ := storage["driver"].(string); !storageDrivers[d] {
 			v.errorf("api_settings.storage.driver", "unknown storage driver %q (valid: %s)", d, keys(storageDrivers))
 		}
+	}
+	if n, ok := asMap(s["auth"])["password_min_length"].(float64); ok && n > tenant.MaxPasswordBytes {
+		v.errorf("api_settings.auth.password_min_length", "must be at most %d (bcrypt uses only the first %d bytes)", tenant.MaxPasswordBytes, tenant.MaxPasswordBytes)
 	}
 	if tz, _ := s["timezone"].(string); tz != "" && tz != "UTC" {
 		if tenant.LoadTimezone(tz).String() == "UTC" {

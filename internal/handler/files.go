@@ -194,7 +194,7 @@ func HandleFileDownload(pool *tenant.PoolManager, serverCfg *config.Config) http
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-		if isActiveContent(contentType) {
+		if !servedInline(contentType) {
 			w.Header().Set("Content-Disposition", "attachment")
 		}
 		w.WriteHeader(http.StatusOK)
@@ -282,12 +282,16 @@ func generateUUID() string {
 
 // extensionFromMIME returns a file extension for the detected MIME type.
 // Falls back to the original filename's extension if MIME lookup fails.
-// isActiveContent reports whether a browser could execute the content as a
-// document (HTML, XML/SVG, scripts).
-func isActiveContent(contentType string) bool {
+// servedInline reports whether a sniffed type is passive media a browser may
+// display in place. Everything else, including text (sniffing reports SVG
+// without an XML declaration and most JavaScript as text/plain), downloads.
+func servedInline(contentType string) bool {
 	ct := strings.ToLower(contentType)
-	return strings.HasPrefix(ct, "text/html") || strings.Contains(ct, "xml") ||
-		strings.Contains(ct, "javascript")
+	if strings.Contains(ct, "svg") || strings.Contains(ct, "xml") {
+		return false
+	}
+	return strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "audio/") ||
+		strings.HasPrefix(ct, "video/") || ct == "application/pdf"
 }
 
 func extensionFromMIME(mimeType, originalFilename string) string {

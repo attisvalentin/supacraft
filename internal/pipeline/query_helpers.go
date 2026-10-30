@@ -6,15 +6,19 @@ import (
 	"time"
 
 	"github.com/attisvalentin/supacraft/internal/query"
+	"github.com/attisvalentin/supacraft/internal/schema"
+	"github.com/attisvalentin/supacraft/internal/tenant"
 )
 
-// BuildWhereRaw builds a parameterized WHERE clause without schema validation.
-// Used when bypass_schema_flags=true. Column names are still double-quoted for SQL safety.
+// BuildWhereRaw builds a parameterized WHERE clause for pipeline steps. It
+// ignores the readable flags (pipelines are trusted config) but every column
+// must exist in table: SQLite reads an unknown double-quoted name as a string
+// literal, which would make the condition match unexpected rows.
 // Supports the same operators as query.BuildWhere: $eq, $ne, $gt, $gte, $lt, $lte, $like, $in, $null.
 //
 // SQLite uses positional `?` placeholders; paramOffset is unused and kept
 // for call-site compatibility.
-func BuildWhereRaw(where map[string]any, paramOffset int) (string, []any, error) {
+func BuildWhereRaw(where map[string]any, table *tenant.SchemaTable, paramOffset int) (string, []any, error) {
 	if len(where) == 0 {
 		return "", nil, nil
 	}
@@ -24,6 +28,9 @@ func BuildWhereRaw(where map[string]any, paramOffset int) (string, []any, error)
 	var args []any
 
 	for colName, value := range where {
+		if _, err := schema.FindColumn(table, colName); err != nil {
+			return "", nil, fmt.Errorf("unknown column %q in table %q", colName, table.Name)
+		}
 		quotedCol := query.QuoteIdent(colName)
 
 		opMap, isOp := value.(map[string]any)

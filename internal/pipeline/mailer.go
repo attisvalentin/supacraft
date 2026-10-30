@@ -235,7 +235,13 @@ func buildSMTPMessage(msg MailMessage) ([]byte, error) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		fmt.Fprintf(&b, "%s: %s\r\n", k, headerSafe(headers[k]))
+		v := headerSafe(headers[k])
+		if k == "Subject" {
+			// Long subjects become several encoded words; put each on its
+			// own continuation line to stay under SMTP's line limit.
+			v = strings.ReplaceAll(v, "?= =?", "?=\r\n =?")
+		}
+		fmt.Fprintf(&b, "%s: %s\r\n", k, v)
 	}
 
 	hasHTML := strings.TrimSpace(msg.HTMLBody) != ""

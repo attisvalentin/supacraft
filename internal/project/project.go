@@ -23,6 +23,9 @@ const (
 	StateDir = ".supacraft"
 )
 
+// MaxTenantIDLength bounds TenantID; the API rejects longer X-Tenant-ID values.
+const MaxTenantIDLength = 64
+
 // ErrNotFound is returned when no supacraft.json exists in the directory.
 var ErrNotFound = errors.New("no " + FileName + " found (run: supacraft init)")
 

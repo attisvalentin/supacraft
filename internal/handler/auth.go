@@ -75,8 +75,8 @@ func HandleRegister(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		// bcrypt ignores everything past 72 bytes.
-		if len(password) > 72 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at most 72 bytes"})
+		if len(password) > tenant.MaxPasswordBytes {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("password must be at most %d bytes", tenant.MaxPasswordBytes)})
 			return
 		}
 

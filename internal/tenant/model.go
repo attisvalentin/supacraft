@@ -118,6 +118,9 @@ type AuthSettings struct {
 
 const defaultPasswordMinLength = 8
 
+// MaxPasswordBytes is bcrypt's input limit; longer passwords are rejected.
+const MaxPasswordBytes = 72
+
 // MinPasswordLength returns the minimum password length for registration.
 func (a AuthSettings) MinPasswordLength() int {
 	if a.PasswordMinLength == nil || *a.PasswordMinLength <= 0 {

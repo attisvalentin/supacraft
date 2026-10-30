@@ -203,6 +203,14 @@ func TestInclude_AppliesAuthAndRowPolicy(t *testing.T) {
 	}
 }
 
+func TestInclude_AuthorizesBeforeValidatingColumns(t *testing.T) {
+	api := newTestAPI(t)
+	_, out, _ := api.do("POST", "/query", `{"table_id":"posts","include":[{"table_id":"notes","select":["internal"]}]}`)
+	if out["error"] != "included table is not accessible" {
+		t.Fatalf("column check ran before authorization: %v", out["error"])
+	}
+}
+
 func TestQuery_DefaultsToMaxLimit(t *testing.T) {
 	api := newTestAPI(t)
 	author := api.register("a@x.co")
@@ -308,35 +316,43 @@ func TestJSONBodyIsCapped(t *testing.T) {
 	if code, _, _ := api.do("POST", "/create", big); code == http.StatusCreated {
 		t.Fatal("oversized body accepted")
 	}
+	if code, _, _ := api.do("POST", "/fn/posts/delete", `{"id":"`+strings.Repeat("a", 1<<17)+`"}`); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized function body: %d, want 413", code)
+	}
+	if code, _, _ := api.do("POST", "/fn/posts/delete", `{"id":`); code != http.StatusBadRequest {
+		t.Fatalf("malformed function body: %d, want 400", code)
+	}
 }
 
-func TestIsActiveContent(t *testing.T) {
+func TestServedInline(t *testing.T) {
 	for ct, want := range map[string]bool{
-		"text/html; charset=utf-8":  true,
-		"text/xml; charset=utf-8":   true,
-		"image/svg+xml":             true,
-		"image/png":                 false,
+		"text/html; charset=utf-8":  false,
+		"text/xml; charset=utf-8":   false,
 		"text/plain; charset=utf-8": false,
+		"image/svg+xml":             false,
+		"image/png":                 true,
+		"video/mp4":                 true,
+		"application/pdf":           true,
 	} {
-		if got := isActiveContent(ct); got != want {
-			t.Errorf("isActiveContent(%q) = %v", ct, got)
+		if got := servedInline(ct); got != want {
+			t.Errorf("servedInline(%q) = %v", ct, got)
 		}
 	}
 }
 
 func insertNote(t *testing.T, dbPath, postID, ownerID, body string) {
 	t.Helper()
-	execSQL(t, dbPath, `INSERT INTO notes (id, body, post_id, owner_id) VALUES (lower(hex(randomblob(16))), '`+body+`', '`+postID+`', '`+ownerID+`')`)
+	execSQL(t, dbPath, `INSERT INTO "notes" ("id", "body", "post_id", "owner_id") VALUES (lower(hex(randomblob(16))), ?, ?, ?)`, body, postID, ownerID)
 }
 
-func execSQL(t *testing.T, dbPath, stmt string) {
+func execSQL(t *testing.T, dbPath, stmt string, args ...any) {
 	t.Helper()
 	db, err := openSQLite(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(stmt); err != nil {
+	if _, err := db.Exec(stmt, args...); err != nil {
 		t.Fatalf("%s: %v", stmt, err)
 	}
 }

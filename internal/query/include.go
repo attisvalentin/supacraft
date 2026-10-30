@@ -38,11 +38,12 @@ func ResolveIncludes(
 		if err != nil {
 			return fmt.Errorf("included table not found: %s", inc.TableID)
 		}
-		if err := schema.ValidateSelectColumns(inc.Select, relatedTable); err != nil {
-			return err
-		}
+		// Authorize first, so callers can't probe a protected table's columns.
 		policySQL, policyArgs, err := authorize(relatedTable)
 		if err != nil {
+			return err
+		}
+		if err := schema.ValidateSelectColumns(inc.Select, relatedTable); err != nil {
 			return err
 		}
 

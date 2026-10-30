@@ -26,7 +26,7 @@ func ExecuteDBSelect(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		columns = allColumnNames(table)
 	}
 
-	whereSql, whereArgs, err := BuildWhereRaw(resolvedWhere, 0)
+	whereSql, whereArgs, err := BuildWhereRaw(resolvedWhere, table, 0)
 	if err != nil {
 		return fmt.Errorf("db.select: build where: %w", err)
 	}
@@ -114,7 +114,7 @@ func ExecuteDBUpdate(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		return fmt.Errorf("db.update: %w", err)
 	}
 
-	whereSql, whereArgs, err := BuildWhereRaw(resolvedWhere, 0)
+	whereSql, whereArgs, err := BuildWhereRaw(resolvedWhere, table, 0)
 	if err != nil {
 		return fmt.Errorf("db.update: build where: %w", err)
 	}
@@ -158,7 +158,7 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		return fmt.Errorf("db.delete: %w", err)
 	}
 
-	whereSql, whereArgs, err := BuildWhereRaw(resolvedWhere, 0)
+	whereSql, whereArgs, err := BuildWhereRaw(resolvedWhere, table, 0)
 	if err != nil {
 		return fmt.Errorf("db.delete: build where: %w", err)
 	}

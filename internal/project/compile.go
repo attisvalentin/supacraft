@@ -119,19 +119,21 @@ func ensureAuthUsers(tables []any) []any {
 		if tm["name"] != "users" {
 			continue
 		}
-		existing := map[string]bool{}
-		for _, c := range asSlice(tm["columns"]) {
-			if n, ok := asMap(c)["name"].(string); ok {
-				existing[n] = true
-			}
-		}
+		// The built-in auth columns always win over a declared column of the
+		// same name, so a declaration cannot make password readable or
+		// is_active client-settable.
+		builtin := map[string]bool{}
 		var cols []any
 		for _, c := range authUserColumns {
-			if !existing[c["name"].(string)] {
-				cols = append(cols, copyMap(c))
+			builtin[c["name"].(string)] = true
+			cols = append(cols, copyMap(c))
+		}
+		for _, c := range asSlice(tm["columns"]) {
+			if n, _ := asMap(c)["name"].(string); !builtin[n] {
+				cols = append(cols, c)
 			}
 		}
-		tm["columns"] = append(cols, asSlice(tm["columns"])...)
+		tm["columns"] = cols
 		return tables
 	}
 	var cols []any

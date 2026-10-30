@@ -173,7 +173,7 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 **`email.smtp.provider`**: free-form label (e.g. `custom`, `resend`, `sendgrid`, `mailgun`, `ses`, `gmail`). For Gmail use `host: smtp.gmail.com`, `port: 587`, `encryption: tls`, `username`: the Gmail address, `password`: a Google **App Password** (requires 2-Step Verification — a normal account password will not work).
 
-**`file_endpoints`**: Per-endpoint `enabled`/`auth` settings for file storage. Downloads are served with `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`; HTML, XML/SVG and JavaScript files are sent as attachments so they never run on the API's origin. Three endpoints: `upload`, `download`, `delete`. Each has `enabled` (default `true`) and `auth` (default `false`). Set `auth: true` to require JWT. File upload (`POST /files`) returns `{ "path": "...", "size": ..., "mime": "..." }` — store the `path` in a `varchar` column. File endpoints need a configured `storage` driver (see below) — generate both together.
+**`file_endpoints`**: Per-endpoint `enabled`/`auth` settings for file storage. Downloads are served with `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`. Only images (except SVG), audio, video and PDF display in the browser; everything else downloads as an attachment, so uploaded files never run on the API's origin. Three endpoints: `upload`, `download`, `delete`. Each has `enabled` (default `true`) and `auth` (default `false`). Set `auth: true` to require JWT. File upload (`POST /files`) returns `{ "path": "...", "size": ..., "mime": "..." }` — store the `path` in a `varchar` column. File endpoints need a configured `storage` driver (see below) — generate both together.
 
 **`storage`**: Where uploaded files are kept. Shape: `{ "driver": <name>, "config": { ... }, "max_file_size": <bytes>, "allowed_mimes": [<mime>, ...] }`. `config`, `max_file_size`, and `allowed_mimes` are optional. **`local` is the default** — use it whenever the user is undecided; it needs no `config` and stores files on the API server's filesystem under `{STORAGE_PATH}/{tenant-id}/...` (`.supacraft/storage` in the project). When the user wants a cloud/remote backend, set `driver` and the `config` fields below.
 
@@ -632,9 +632,9 @@ Use this section when writing scripts, `curl` commands, or client code that talk
 
 Available when `auth_enabled: true` on the tenant and the specific endpoint is enabled in `api_settings.auth_endpoints`.
 
-- Passwords must be at least 8 characters (at most 72 bytes). Change the minimum with `api_settings.auth.password_min_length`.
+- Passwords must be at least 8 characters (at most 72 bytes). Change the minimum with `api_settings.auth.password_min_length` (at most 72).
 - Register accepts `email`, `password` and any **creatable** column you added to `users` (e.g. a display name). Columns that grant access (`role`, `is_admin`, `plan`, …) must be `"creatable": false, "updatable": false`, otherwise anyone can register as an admin; validation warns about such columns.
-- `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens. Access tokens already issued stay valid until they expire (`api_settings.auth.access_token_ttl`, seconds, default 86400).
+- The built-in columns (`id`, `email`, `password`, `is_active`, `created_at`, `updated_at`) keep their own settings even if you declare them in `users`. `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens. Access tokens already issued stay valid until they expire (`api_settings.auth.access_token_ttl`, seconds, default 86400).
 
 #### POST /auth/register
 ```bash
