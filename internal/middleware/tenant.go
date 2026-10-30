@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/tenant"
@@ -15,6 +16,11 @@ import (
 type contextKey string
 
 const tenantContextKey contextKey = "tenant"
+
+// validTenantID matches the ids the CLI generates (project.Slug). The id is
+// used in file paths and as the rate-limit key, so anything else — "../x",
+// "./demo" — is rejected before it reaches the filesystem.
+var validTenantID = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 
 func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -29,6 +35,10 @@ func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http
 				writeError(w, http.StatusBadRequest, "X-Tenant-ID header is required")
 				return
 			}
+			if !validTenantID.MatchString(tenantID) {
+				writeError(w, http.StatusNotFound, "tenant not found")
+				return
+			}
 
 			cfg, err := store.GetTenantConfig(r.Context(), tenantID)
 			if errors.Is(err, tenant.ErrTenantNotFound) {
@@ -41,7 +51,7 @@ func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http
 				if errorlog.Global != nil {
 					errorlog.Global.Log(tenantID, r.Method, r.URL.Path, http.StatusInternalServerError, msg)
 				}
-				writeError(w, http.StatusInternalServerError, msg)
+				writeError(w, http.StatusInternalServerError, "failed to load tenant config")
 				return
 			}
 

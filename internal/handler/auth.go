@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/attisvalentin/supacraft/internal/middleware"
 	"github.com/attisvalentin/supacraft/internal/query"
@@ -16,6 +17,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// dummyHash is compared against when a login email is unknown.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("supacraft-timing-equalizer"), bcrypt.DefaultCost)
 
 type AuthRequest struct {
 	Email    string `json:"email"`
@@ -64,6 +68,15 @@ func HandleRegister(pool *tenant.PoolManager) http.HandlerFunc {
 		password, ok := passwordVal.(string)
 		if !ok || password == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be a non-empty string"})
+			return
+		}
+		if minLen := cfg.APISettings.Auth.MinPasswordLength(); utf8.RuneCountInString(password) < minLen {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("password must be at least %d characters", minLen)})
+			return
+		}
+		// bcrypt ignores everything past 72 bytes.
+		if len(password) > tenant.MaxPasswordBytes {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("password must be at most %d bytes", tenant.MaxPasswordBytes)})
 			return
 		}
 
@@ -148,16 +161,20 @@ func HandleLogin(pool *tenant.PoolManager) http.HandlerFunc {
 		}
 
 		var userID, hashedPassword string
+		var active bool
 		err = dbPool.QueryRow(r.Context(),
-			`SELECT "id", "password" FROM "users" WHERE "email" = ?`,
+			`SELECT "id", "password", COALESCE("is_active", 1) FROM "users" WHERE "email" = ?`,
 			req.Email,
-		).Scan(&userID, &hashedPassword)
+		).Scan(&userID, &hashedPassword, &active)
 		if err != nil {
+			// Spend the same bcrypt time as a real check, so response timing
+			// doesn't reveal which emails are registered.
+			bcrypt.CompareHashAndPassword(dummyHash, []byte(req.Password))
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 			return
 		}
 
-		if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
+		if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil || !active {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 			return
 		}
@@ -271,6 +288,17 @@ func HandleRefresh(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		email, _ := claims["email"].(string)
+
+		// Refresh tokens outlive account changes: re-check that the user
+		// still exists and is active before issuing new tokens.
+		var active bool
+		err = dbPool.QueryRow(r.Context(),
+			`SELECT COALESCE("is_active", 1) FROM "users" WHERE "id" = ?`, userID,
+		).Scan(&active)
+		if err != nil || !active {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid refresh token"})
+			return
+		}
 
 		auth := cfg.APISettings.Auth
 		newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{

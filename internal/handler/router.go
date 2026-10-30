@@ -11,6 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// authAttemptsPerMinute limits /auth/* calls per tenant and client IP.
+const authAttemptsPerMinute = 20
+
 func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *errorlog.ErrorLog, serverCfg *config.Config) http.Handler {
 	r := chi.NewRouter()
 
@@ -21,32 +24,38 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.CORSResponse(store, serverCfg.DefaultTenant))
 		r.Use(middleware.TenantMiddleware(store, serverCfg.DefaultTenant))
-		r.Use(middleware.RateLimitMiddleware())
+		r.Use(middleware.RateLimitMiddleware(serverCfg.TrustProxy))
 
-		// CRUD endpoints
-		r.Post("/query", HandleQuery(pool))
-		r.Post("/create", HandleCreate(pool))
-		r.Post("/update", HandleUpdate(pool))
-		r.Post("/delete", HandleDelete(pool))
-
-		// Meta
-		r.Get("/meta/schema", HandleMeta)
-
-		// Auth
-		r.Post("/auth/register", HandleRegister(pool))
-		r.Post("/auth/login", HandleLogin(pool))
-		r.Post("/auth/refresh", HandleRefresh(pool))
-
-		// Files
+		// Uploads enforce MaxFileSize themselves; everything else is JSON.
 		r.Post("/files", HandleFileUpload(pool, serverCfg))
-		r.Get("/files/*", HandleFileDownload(pool, serverCfg))
-		r.Delete("/files/*", HandleFileDelete(pool, serverCfg))
 
-		// Logs
-		r.Get("/logs", HandleLogs(errLog))
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.MaxBody(serverCfg.MaxBodySize))
 
-		// Pipeline functions
-		r.HandleFunc("/fn/*", HandleFunction(pool))
+			// CRUD endpoints
+			r.Post("/query", HandleQuery(pool))
+			r.Post("/create", HandleCreate(pool))
+			r.Post("/update", HandleUpdate(pool))
+			r.Post("/delete", HandleDelete(pool))
+
+			// Meta
+			r.Get("/meta/schema", HandleMeta)
+
+			// Auth
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.AuthRateLimit(authAttemptsPerMinute, serverCfg.TrustProxy))
+				r.Post("/auth/register", HandleRegister(pool))
+				r.Post("/auth/login", HandleLogin(pool))
+				r.Post("/auth/refresh", HandleRefresh(pool))
+			})
+
+			// Files
+			r.Get("/files/*", HandleFileDownload(pool, serverCfg))
+			r.Delete("/files/*", HandleFileDelete(pool, serverCfg))
+
+			// Pipeline functions
+			r.HandleFunc("/fn/*", HandleFunction(pool))
+		})
 	})
 
 	// Operator studio proxy — HMAC-authenticated, no tenant header. Tenant is

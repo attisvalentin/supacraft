@@ -198,6 +198,10 @@ The `users` table and the auth endpoints come from `"auth_enabled": true`; you d
 
 Every command accepts `--dir` / `-C` to point at a project directory.
 
+`dev`, `mcp` and `studio` listen on `127.0.0.1` only, so your work-in-progress API is not reachable
+from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a phone).
+`serve` listens on all interfaces.
+
 ## MCP tools
 
 | Tool | Purpose |
@@ -242,8 +246,26 @@ supacraft serve --port 8080            # or:
 sudo supacraft service install         # systemd, restarts on failure
 ```
 
-Put a reverse proxy (Caddy, nginx) in front for HTTPS. To back up the app, back up `.supacraft/`
+Put a reverse proxy (Caddy, nginx) in front for HTTPS. In that setup, run with `--host 127.0.0.1`
+so only the proxy can reach the API, and set `TRUST_PROXY=1` so rate limits see real client
+addresses. To back up the app, back up `.supacraft/`
 (for example with [Litestream](https://litestream.io) for continuous SQLite replication).
+
+### Server settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HOST` / `PORT` | see above / `8080` | Listen address (same as `--host` / `--port`) |
+| `TRUST_PROXY` | off | Read client IPs from `X-Real-IP` / `X-Forwarded-For` (only behind a proxy) |
+| `MAX_BODY_SIZE` | `1048576` | Max JSON request body in bytes |
+| `MAX_FILE_SIZE` | `104857600` | Max upload size in bytes |
+| `STUDIO_SECRET` | random | Studio password |
+
+## Security
+
+Found a vulnerability? Please report it privately through
+[GitHub Security Advisories](https://github.com/attisvalentin/supacraft/security/advisories/new)
+rather than in a public issue.
 
 ## Is it for me?
 

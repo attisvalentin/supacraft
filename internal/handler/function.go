@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -71,8 +72,27 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 		// Request body (for POST/PUT/PATCH)
 		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			var body map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			dec := json.NewDecoder(r.Body)
+			err := dec.Decode(&body)
+			if err == nil {
+				// The body must be exactly one JSON object.
+				if extra := dec.Decode(&struct{}{}); !errors.Is(extra, io.EOF) {
+					err = extra
+					if err == nil {
+						err = errors.New("trailing data after JSON body")
+					}
+				}
+			}
+			var tooLarge *http.MaxBytesError
+			switch {
+			case err == nil:
 				pCtx.Set("request", body)
+			case errors.As(err, &tooLarge):
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+				return
+			case !errors.Is(err, io.EOF):
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+				return
 			}
 		}
 

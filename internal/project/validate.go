@@ -46,10 +46,12 @@ func HasErrors(issues []Issue) bool {
 }
 
 var (
-	identRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
-	envKeyRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	assignRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	columnTypes = setOf("primary", "uuid", "int", "bigint", "smallint", "tinyint", "bigserial",
+	identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
+	// privilegedColumn flags users columns that usually grant access.
+	privilegedColumn = regexp.MustCompile(`(?i)^(is_)?(admin|role|roles|permissions?|staff|superuser|verified|plan|tier|credits?|balance)$`)
+	envKeyRe         = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	assignRe         = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	columnTypes      = setOf("primary", "uuid", "int", "bigint", "smallint", "tinyint", "bigserial",
 		"decimal", "numeric", "real", "double", "float", "varchar", "char", "text", "boolean",
 		"timestamp", "timestamptz", "date", "time", "interval", "json", "jsonb", "bytea",
 		"blob", "binary", "enum")
@@ -91,6 +93,8 @@ func (p *Project) Validate() []Issue {
 
 	if strings.TrimSpace(p.Name()) == "" {
 		v.errorf("name", "project name is required")
+	} else if id := p.TenantID(); len(id) > MaxTenantIDLength {
+		v.errorf("name", "too long: its id %q must be at most %d characters", id, MaxTenantIDLength)
 	}
 	for _, key := range []string{"schema", "api_settings", "functions", "cronjobs"} {
 		if val, ok := raw[key]; ok && val != nil {
@@ -179,6 +183,14 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 			if strings.EqualFold(ctype, "enum") && len(asSlice(cm["enum_values"])) == 0 {
 				v.errorf(cpath+".enum_values", "enum column %q needs enum_values", cname)
 			}
+			if authEnabled && name == "users" && privilegedColumn.MatchString(cname) {
+				if c, set := cm["creatable"].(bool); !set || c {
+					v.warnf(cpath+".creatable", "users.%s looks like a permission; anyone can set it at /auth/register unless it has \"creatable\": false", cname)
+				}
+				if u, set := cm["updatable"].(bool); !set || u {
+					v.warnf(cpath+".updatable", "users.%s looks like a permission; clients can change it through /update unless it has \"updatable\": false", cname)
+				}
+			}
 		}
 	}
 	for i, r := range asSlice(schema["relations"]) {
@@ -218,6 +230,9 @@ func (v *validator) apiSettings(s map[string]any) {
 		if d, _ := storage["driver"].(string); !storageDrivers[d] {
 			v.errorf("api_settings.storage.driver", "unknown storage driver %q (valid: %s)", d, keys(storageDrivers))
 		}
+	}
+	if n, ok := asMap(s["auth"])["password_min_length"].(float64); ok && n > tenant.MaxPasswordBytes {
+		v.errorf("api_settings.auth.password_min_length", "must be at most %d (bcrypt uses only the first %d bytes)", tenant.MaxPasswordBytes, tenant.MaxPasswordBytes)
 	}
 	if tz, _ := s["timezone"].(string); tz != "" && tz != "UTC" {
 		if tenant.LoadTimezone(tz).String() == "UTC" {

@@ -238,3 +238,37 @@ func TestExecuteEmailSend_TemplateMode(t *testing.T) {
 		t.Fatalf("unexpected template_id in assigned result: %#v", assigned)
 	}
 }
+
+func TestBuildSMTPMessage_StripsHeaderInjection(t *testing.T) {
+	raw, err := buildSMTPMessage(MailMessage{
+		FromEmail: "app@example.com",
+		To:        []string{"user@example.com"},
+		Subject:   "Hello\r\nBcc: victim@example.com",
+		TextBody:  "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\r\n") {
+		if strings.HasPrefix(line, "Bcc:") {
+			t.Fatalf("injected header in message:\n%s", raw)
+		}
+	}
+}
+
+func TestBuildSMTPMessage_FoldsLongSubject(t *testing.T) {
+	raw, err := buildSMTPMessage(MailMessage{
+		FromEmail: "app@example.com",
+		To:        []string{"user@example.com"},
+		Subject:   strings.Repeat("é", 300),
+		TextBody:  "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\r\n") {
+		if len(line) > 998 {
+			t.Fatalf("header line of %d octets", len(line))
+		}
+	}
+}

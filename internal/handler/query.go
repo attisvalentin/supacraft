@@ -130,6 +130,9 @@ func HandleQuery(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
+		if req.Limit <= 0 || req.Limit > query.MaxLimit {
+			req.Limit = query.MaxLimit
+		}
 		paginationSql, paginationArgs := query.ApplyPagination(req.Limit, req.Offset, len(whereArgs))
 		sql, args := query.BuildSelect(table.Name, columns, whereSql, whereArgs, orderBySql, paginationSql, paginationArgs)
 
@@ -158,7 +161,24 @@ func HandleQuery(pool *tenant.PoolManager) http.HandlerFunc {
 			results = append(results, schema.FilterNonReadableFromRow(row, table))
 		}
 
-		if err := query.ResolveIncludes(r.Context(), dbPool, req.TableID, results, req.Include, &cfg.Schema, loc); err != nil {
+		// Included tables get the same checks as a direct query on them:
+		// exposed, authenticated if required, filtered by their row policy.
+		authorizeInclude := func(t *tenant.SchemaTable) (string, []any, error) {
+			settings, ok := cfg.APISettings.Tables[t.UUID]
+			if !ok || !settings.Query.Enabled {
+				return "", nil, query.ErrIncludeForbidden
+			}
+			if settings.Query.Auth && claims == nil {
+				c, err := validateJWT(r, cfg, pool)
+				if err != nil {
+					return "", nil, query.ErrIncludeForbidden
+				}
+				claims = c
+			}
+			return query.BuildRowPolicy(settings.Query.RowPolicy, claims, 0)
+		}
+
+		if err := query.ResolveIncludes(r.Context(), dbPool, req.TableID, results, req.Include, &cfg.Schema, loc, authorizeInclude); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -214,9 +234,15 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// writeErrorJSON logs the full message and returns only its leading context
+// ("insert failed: <driver error>" → "insert failed"), so database and
+// filesystem details stay in the error log instead of reaching clients.
 func writeErrorJSON(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	if errorlog.Global != nil {
 		errorlog.Global.Log(r.Header.Get("X-Tenant-ID"), r.Method, r.URL.Path, status, msg)
+	}
+	if i := strings.Index(msg, ": "); i > 0 {
+		msg = msg[:i]
 	}
 	writeJSON(w, status, map[string]string{"error": msg})
 }

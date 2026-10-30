@@ -191,3 +191,61 @@ func asValidation(err error, target **ValidationError) bool {
 	}
 	return ok
 }
+
+func TestValidate_SecurityLimits(t *testing.T) {
+	long := strings.Repeat("a", MaxTenantIDLength+1)
+	p := load(t, `{"name": "`+long+`", "api_settings": {"auth": {"password_min_length": 100}}}`)
+	got := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+		}
+	}
+	for _, want := range []string{"name", "api_settings.auth.password_min_length"} {
+		if !got[want] {
+			t.Errorf("missing error at %s (got %v)", want, got)
+		}
+	}
+}
+
+func TestValidate_WarnsAboutPrivilegedUsersColumns(t *testing.T) {
+	p := load(t, `{"name": "x", "auth_enabled": true, "schema": {"tables": [{"name": "users", "columns": [
+    {"name": "role", "type": "varchar", "creatable": false}]}]}}`)
+	var warned bool
+	for _, i := range p.Validate() {
+		if i.Severity == "warning" && i.Path == "schema.tables[0].columns[0].updatable" {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("no warning for updatable users.role")
+	}
+}
+
+func TestCompile_BuiltinAuthColumnsWin(t *testing.T) {
+	p := load(t, `{"name": "x", "auth_enabled": true, "schema": {"tables": [{"name": "users", "columns": [
+    {"name": "is_active", "type": "boolean"},
+    {"name": "password", "type": "varchar"},
+    {"name": "nickname", "type": "varchar"}]}]}}`)
+	c, err := p.Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cols := map[string]map[string]any{}
+	for _, t := range c.Payload["schema"].(map[string]any)["tables"].([]any) {
+		tm := t.(map[string]any)
+		if tm["name"] != "users" {
+			continue
+		}
+		for _, col := range tm["columns"].([]any) {
+			cm := col.(map[string]any)
+			cols[cm["name"].(string)] = cm
+		}
+	}
+	if cols["is_active"]["creatable"] != false || cols["password"]["readable"] != false {
+		t.Errorf("declared auth columns overrode built-in flags: %v / %v", cols["is_active"], cols["password"])
+	}
+	if cols["nickname"] == nil {
+		t.Error("custom users column dropped")
+	}
+}

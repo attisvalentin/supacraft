@@ -53,12 +53,19 @@ func Start(ctx context.Context, cfg *config.Config, withCron bool) (*Server, <-c
 	pools.StartEvictor(ctx)
 	errLog.StartCleanup(ctx)
 
-	ln, err := net.Listen("tcp", ":"+cfg.Port)
+	addr := net.JoinHostPort(cfg.Host, cfg.Port)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		errLog.Close()
-		return nil, nil, fmt.Errorf("listen on :%s: %w", cfg.Port, err)
+		return nil, nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
-	srv := &http.Server{Handler: handler.NewRouter(cached, pools, errLog, cfg)}
+	srv := &http.Server{
+		Handler: handler.NewRouter(cached, pools, errLog, cfg),
+		// Slow clients must not hold connections open indefinitely. There is
+		// no overall ReadTimeout because large uploads legitimately take time.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 
 	var crons *cronjob.CronManager
 	if withCron && !cfg.DisableCron {

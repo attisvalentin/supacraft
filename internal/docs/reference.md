@@ -173,7 +173,7 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 **`email.smtp.provider`**: free-form label (e.g. `custom`, `resend`, `sendgrid`, `mailgun`, `ses`, `gmail`). For Gmail use `host: smtp.gmail.com`, `port: 587`, `encryption: tls`, `username`: the Gmail address, `password`: a Google **App Password** (requires 2-Step Verification — a normal account password will not work).
 
-**`file_endpoints`**: Per-endpoint `enabled`/`auth` settings for file storage. Three endpoints: `upload`, `download`, `delete`. Each has `enabled` (default `true`) and `auth` (default `false`). Set `auth: true` to require JWT. File upload (`POST /files`) returns `{ "path": "...", "size": ..., "mime": "..." }` — store the `path` in a `varchar` column. File endpoints need a configured `storage` driver (see below) — generate both together.
+**`file_endpoints`**: Per-endpoint `enabled`/`auth` settings for file storage. Downloads are served with `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`. Only images (except SVG), audio, video and PDF display in the browser; everything else downloads as an attachment, so uploaded files never run on the API's origin. Three endpoints: `upload`, `download`, `delete`. Each has `enabled` (default `true`) and `auth` (default `false`). Set `auth: true` to require JWT. File upload (`POST /files`) returns `{ "path": "...", "size": ..., "mime": "..." }` — store the `path` in a `varchar` column. File endpoints need a configured `storage` driver (see below) — generate both together.
 
 **`storage`**: Where uploaded files are kept. Shape: `{ "driver": <name>, "config": { ... }, "max_file_size": <bytes>, "allowed_mimes": [<mime>, ...] }`. `config`, `max_file_size`, and `allowed_mimes` are optional. **`local` is the default** — use it whenever the user is undecided; it needs no `config` and stores files on the API server's filesystem under `{STORAGE_PATH}/{tenant-id}/...` (`.supacraft/storage` in the project). When the user wants a cloud/remote backend, set `driver` and the `config` fields below.
 
@@ -190,7 +190,7 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 **Storage secrets — same rule as `env`.** Write the secret fields (`s3.secret`, `ftp.password`, `sftp.password`, `gcs.key_file`, `azure.key`) as `"${NAME}"` references and put the values in `.env`.
 
-**`rate_limit`**: Per-tenant request rate limit. `enabled: true` + `requests_per_minute: N` caps the tenant at N requests/minute across all endpoints (sliding window, keyed by `X-Tenant-ID`). Each tenant has its own counter — one tenant exhausting their limit cannot affect others. Over-limit requests return `429 Too Many Requests`. Omit the block or set `enabled: false` for no limit.
+**`rate_limit`**: Request rate limit per client. `enabled: true` + `requests_per_minute: N` lets each client IP make N requests/minute to the tenant across all endpoints (sliding window), so one noisy client cannot lock out everyone else. Over-limit requests return `429 Too Many Requests`. Omit the block or set `enabled: false` for no limit. Behind a reverse proxy, start the server with `TRUST_PROXY=1` so the limit uses the client address from `X-Real-IP` / `X-Forwarded-For` instead of the proxy's. `/auth/*` is always limited to 20 requests/minute per client IP, whatever this block says.
 
 **`cors`**: Controls which **browser** origins may read responses from the tenant API. Single field `cors.allowed_origin`, a string:
 - `"*"` — allow any origin.
@@ -632,6 +632,10 @@ Use this section when writing scripts, `curl` commands, or client code that talk
 
 Available when `auth_enabled: true` on the tenant and the specific endpoint is enabled in `api_settings.auth_endpoints`.
 
+- Passwords need at least `api_settings.auth.password_min_length` characters (default 8, allowed 1–72) and at most 72 bytes.
+- Register accepts `email`, `password` and any **creatable** column you added to `users` (e.g. a display name). Columns that grant access (`role`, `is_admin`, `plan`, …) must be `"creatable": false, "updatable": false`, otherwise anyone can register as an admin; validation warns about such columns.
+- The built-in columns (`id`, `email`, `password`, `is_active`, `created_at`, `updated_at`) keep their own settings even if you declare them in `users`. `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens. Access tokens already issued stay valid until they expire (`api_settings.auth.access_token_ttl`, seconds, default 86400).
+
 #### POST /auth/register
 ```bash
 curl -X POST http://localhost:8080/auth/register \
@@ -683,7 +687,9 @@ Response:
 }
 ```
 
-**Include related tables** (both must be `exposed`):
+`limit` defaults to 100 and is capped at 100; page with `offset` or `meta.next_cursor`.
+
+**Include related tables**: the included table must have `query.enabled`, and its own `auth` and `row_policy` apply to the included rows. `select` may only name readable columns.
 ```json
 {
   "table_id": "posts",
@@ -744,35 +750,9 @@ Use this to discover table UUIDs when writing scripts.
 
 ---
 
-### Error Log Endpoint
+### Error Log
 
-#### GET /logs
-Returns error logs for the tenant, useful for debugging failed requests. All API error responses include descriptive error details (e.g. `"insert failed: duplicate key value violates unique constraint..."`).
-
-```bash
-curl "http://localhost:8080/logs?limit=10&offset=0"
-```
-Response:
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "timestamp": "2026-03-25 18:30:00",
-      "tenant_id": "...",
-      "method": "POST",
-      "path": "/auth/register",
-      "status_code": 400,
-      "error_message": "registration failed: null value in column \"is_active\" violates not-null constraint"
-    }
-  ],
-  "meta": { "total": 5, "limit": 10, "offset": 0 }
-}
-```
-
-- Query params: `limit` (1-200, default 50), `offset` (default 0)
-- Logs are automatically cleaned up after 7 days
-- Use this endpoint to diagnose why requests are failing — the `error_message` field contains the actual database or server error
+API error responses carry only a short reason (e.g. `"insert failed"`). The full message, including the database or server error, goes to the error log, which is **not** served over HTTP. Read it with the MCP `get_logs` tool, or open `.supacraft/errors.db` with any SQLite client. Entries are kept for 7 days.
 
 ---
 
@@ -868,6 +848,5 @@ curl -X POST http://localhost:8080/query \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"table_id": "posts", "limit": 5}'
 
-# 5. Debug errors — check error logs for this tenant
-curl "http://localhost:8080/logs?limit=5"
+# 5. Debug errors: use the MCP get_logs tool (or open .supacraft/errors.db)
 ```

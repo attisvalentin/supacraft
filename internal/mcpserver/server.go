@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/attisvalentin/supacraft/internal/docs"
+	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/project"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -238,7 +239,7 @@ func (s *server) register(srv *mcp.Server) {
 			if in.Limit <= 0 {
 				in.Limit = 20
 			}
-			return s.callEndpoint(ctx, "GET", fmt.Sprintf("/logs?limit=%d", in.Limit), nil, "", nil)
+			return s.getLogs(ctx, in.Limit)
 		})
 }
 
@@ -332,6 +333,25 @@ func (s *server) callEndpoint(ctx context.Context, method, path string, body any
 		parsed = string(data)
 	}
 	return jsonResult(map[string]any{"status": resp.StatusCode, "body": parsed}), nil, nil
+}
+
+// getLogs reads the error log straight from disk. It is not exposed over
+// HTTP: error messages carry internal details meant for the developer only.
+func (s *server) getLogs(ctx context.Context, limit int) (*mcp.CallToolResult, any, error) {
+	p, err := project.Load(s.opts.Dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	el, err := errorlog.Open(filepath.Join(p.DataDir(), "errors.db"))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer el.Close()
+	entries, total, err := el.Query(ctx, p.TenantID(), min(limit, 200), 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	return jsonResult(map[string]any{"data": entries, "total": total}), nil, nil
 }
 
 func (s *server) queryDB(ctx context.Context, query string) (*mcp.CallToolResult, any, error) {
