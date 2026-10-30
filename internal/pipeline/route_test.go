@@ -54,3 +54,9 @@ func TestValidateInput_Query(t *testing.T) {
 		t.Fatalf("expected sort and page errors, got %v", errs)
 	}
 }
+
+func TestRouteShape_IgnoresSlashes(t *testing.T) {
+	if RouteShape("/fn/a/{id}/") != RouteShape("/fn/a/{slug}") {
+		t.Fatal("trailing slash changes the route shape")
+	}
+}

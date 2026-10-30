@@ -105,23 +105,18 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 			}
 		} else {
 			// Backward compat: inject all URL query params for functions without url_params
-			for key, values := range r.URL.Query() {
-				if len(values) == 1 {
-					queryParams[key] = values[0]
-				} else {
-					anyValues := make([]any, len(values))
-					for i, v := range values {
-						anyValues[i] = v
-					}
-					queryParams[key] = anyValues
-				}
-			}
+			queryParams = allQueryParams(r)
 		}
 		if input := matchedFunc.Route.Input; len(input) > 0 {
 			fromQuery := r.Method == http.MethodGet
 			data := body
 			if fromQuery {
-				data = queryParams
+				data = allQueryParams(r)
+				for k, def := range matchedFunc.Route.URLParams {
+					if _, sent := data[k]; !sent && def != "" {
+						data[k] = def
+					}
+				}
 			}
 			clean, fieldErrs := pipeline.ValidateInput(input, data, fromQuery)
 			if fieldErrs != nil {
@@ -185,4 +180,21 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 		// No response step was executed
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// allQueryParams returns the query string as a map; repeated keys become arrays.
+func allQueryParams(r *http.Request) map[string]any {
+	out := make(map[string]any)
+	for key, values := range r.URL.Query() {
+		if len(values) == 1 {
+			out[key] = values[0]
+		} else {
+			anyValues := make([]any, len(values))
+			for i, v := range values {
+				anyValues[i] = v
+			}
+			out[key] = anyValues
+		}
+	}
+	return out
 }

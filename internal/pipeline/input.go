@@ -81,7 +81,7 @@ func fromQueryString(s, typ string) (any, error) {
 	switch typ {
 	case "number":
 		f, err := strconv.ParseFloat(s, 64)
-		if err != nil {
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 			return nil, fmt.Errorf("must be a number")
 		}
 		return f, nil
@@ -97,6 +97,9 @@ func fromQueryString(s, typ string) (any, error) {
 			return nil, fmt.Errorf("must be true or false")
 		}
 		return b, nil
+	case "array":
+		// A repeated parameter arrives as an array; a single one is a string.
+		return []any{s}, nil
 	}
 	return s, nil
 }

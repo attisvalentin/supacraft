@@ -75,6 +75,31 @@ const shopProject = `{
         {"type": "response", "data": {"per_product": "{{per_product}}", "total": "{{total}}"}}
       ]
     },
+    "tx_try": {
+      "route": {"path": "/fn/tx-try", "method": "POST"},
+      "steps": [
+        {"type": "transaction", "steps": [
+          {"type": "db.insert", "table": "orders", "data": {"id": "keep", "qty": 1}},
+          {"type": "try", "steps": [
+            {"type": "db.insert", "table": "orders", "data": {"id": "drop", "qty": 1}},
+            {"type": "fail", "message": "nope"}
+          ]}
+        ]},
+        {"type": "response", "data": {"ok": true}}
+      ]
+    },
+    "search": {
+      "route": {"path": "/fn/search", "method": "GET", "url_params": {"sort": "name"},
+        "input": {"sort": {"type": "string"}, "tags": {"type": "array", "min": 1, "required": true}, "max_price": {"type": "number"}}},
+      "steps": [{"type": "response", "data": {"sort": "{{query.sort}}", "tags": "{{query.tags}}"}}]
+    },
+    "names_with_orders": {
+      "route": {"path": "/fn/names", "method": "GET"},
+      "steps": [
+        {"type": "db.select", "table": "products", "columns": ["name"], "include": [{"table": "orders"}], "assign": "rows"},
+        {"type": "response", "data": {"rows": "{{rows}}"}}
+      ]
+    },
     "risky": {
       "route": {"path": "/fn/risky", "method": "POST"},
       "steps": [
@@ -221,6 +246,36 @@ func TestTry_CatchesFail(t *testing.T) {
 	code, out, raw := api.do("POST", "/fn/risky", `{}`)
 	if code != http.StatusOK || out["caught"] != "teapot" || out["status"] != float64(418) {
 		t.Fatalf("try/catch: %d %s", code, raw)
+	}
+}
+
+func TestTry_InsideTransactionUndoesOnlyItsWrites(t *testing.T) {
+	api := newShopAPI(t)
+	if code, _, raw := api.do("POST", "/fn/tx-try", `{}`); code != http.StatusOK {
+		t.Fatalf("tx-try: %d %s", code, raw)
+	}
+	if n := countRows(t, api.dbPath, "orders"); n != 1 {
+		t.Fatalf("want only the order outside try, got %d orders", n)
+	}
+}
+
+func TestInput_QueryWithURLParams(t *testing.T) {
+	api := newShopAPI(t)
+	code, out, raw := api.do("GET", "/fn/search?tags=a", "")
+	if code != http.StatusOK || out["sort"] != "name" || len(out["tags"].([]any)) != 1 {
+		t.Fatalf("single tag with url_params default: %d %s", code, raw)
+	}
+	for _, q := range []string{"", "?tags=a&max_price=NaN", "?tags=a&max_price=Inf"} {
+		if code, _, raw := api.do("GET", "/fn/search"+q, ""); code != http.StatusBadRequest {
+			t.Errorf("%q accepted: %d %s", q, code, raw)
+		}
+	}
+}
+
+func TestInclude_NeedsLinkColumn(t *testing.T) {
+	api := newShopAPI(t)
+	if code, out, raw := api.do("GET", "/fn/names", ""); code != http.StatusInternalServerError || out["rows"] != nil {
+		t.Fatalf("include without the link column succeeded: %d %s", code, raw)
 	}
 }
 

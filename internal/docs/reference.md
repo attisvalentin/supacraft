@@ -259,7 +259,7 @@ A literal segment beats a parameter, so `/fn/posts/latest` is served by its own 
 - `min` / `max`: string length, number value, or array length
 - `pattern` (regular expression, strings only), `format`: `email | uuid | date | datetime | url`, `enum`
 - **Body:** a field that isn't declared is rejected (`"unknown field"`), so clients can't slip extra columns into a `db.insert` that writes `{{request}}`
-- **Query string:** values are converted to the declared type (`?page=2` → number 2); undeclared parameters are dropped
+- **Query string:** values are converted to the declared type (`?page=2` → number 2, `?tag=a&tag=b` → array); undeclared parameters are dropped. `url_params` defaults still apply
 - Prefer `input` over checking fields with `if` steps
 
 ---
@@ -403,7 +403,7 @@ Max 1000 iterations.
   ]
 }
 ```
-- All database steps inside run atomically: if any step fails (including `fail`), every write inside is rolled back
+- All database steps inside run atomically: if any step fails (including `fail`), every write inside is rolled back. A `try` inside can catch a failure; only that try's writes are undone then
 - Variables assigned inside stay available after the transaction
 - `http.request`, `email.send` and `response` are not allowed inside (they can't be rolled back); put them after the transaction
 - The database is locked for the duration, so keep transactions short
@@ -432,6 +432,7 @@ Max 1000 iterations.
 }
 ```
 - If a step in `steps` fails, runs `catch` (optional) and continues after the try
+- Inside a `transaction`, the database writes of a failed `steps` block are undone (the rest of the transaction is kept)
 - The error is available as `{{err.message}}`, `{{err.status}}`, `{{err.data}}` (`as` defaults to `error`)
 - For `fail` errors, `message`/`status`/`data` are the fail step's. For anything else, `message` is `"internal error"`, `status` is 500, and `{{err.detail}}` has the full error text — don't return `detail` to clients (it can contain SQL or upstream details)
 - A `response` inside `steps` is not an error and ends the function as usual

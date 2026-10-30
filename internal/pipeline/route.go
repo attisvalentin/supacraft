@@ -36,7 +36,7 @@ func RouteParams(path string) ([]string, error) {
 // RouteShape replaces every {param} segment with {} so that routes differing
 // only in parameter names compare equal.
 func RouteShape(path string) string {
-	segs := strings.Split(path, "/")
+	segs := strings.Split(strings.Trim(path, "/"), "/")
 	for i, s := range segs {
 		if routeParamRe.MatchString(s) {
 			segs[i] = "{}"

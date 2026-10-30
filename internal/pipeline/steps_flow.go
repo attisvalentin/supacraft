@@ -74,7 +74,24 @@ func ExecuteTransaction(ctx context.Context, step *tenant.FunctionStep, pCtx *Pi
 // the variable named by "as" (default "error"). A response step inside try is
 // not an error and is never caught.
 func ExecuteTry(ctx context.Context, step *tenant.FunctionStep, pCtx *PipelineContext, deps *StepDeps) error {
+	// Inside a transaction, a savepoint undoes the failed body's writes while
+	// keeping the rest of the transaction.
+	if deps.InTransaction {
+		if _, err := deps.DBPool.Exec(ctx, "SAVEPOINT supacraft_try"); err != nil {
+			return fmt.Errorf("try: savepoint: %w", err)
+		}
+	}
 	err := Execute(ctx, step.SubSteps, pCtx, deps)
+	if deps.InTransaction && ctx.Err() == nil {
+		if err != nil && !errors.Is(err, ErrResponseSent) {
+			if _, rbErr := deps.DBPool.Exec(ctx, "ROLLBACK TO supacraft_try"); rbErr != nil {
+				return fmt.Errorf("try: rollback to savepoint: %w", rbErr)
+			}
+		}
+		if _, relErr := deps.DBPool.Exec(ctx, "RELEASE supacraft_try"); relErr != nil {
+			return fmt.Errorf("try: release savepoint: %w", relErr)
+		}
+	}
 	if err == nil || errors.Is(err, ErrResponseSent) || ctx.Err() != nil {
 		return err
 	}
