@@ -10,7 +10,7 @@ Thanks for your interest! Bug reports, ideas and pull requests are all welcome.
 
 ## Development
 
-You need Go 1.25 or newer.
+You need Go 1.26 or newer.
 
 ```bash
 git clone https://github.com/attisvalentin/supacraft
