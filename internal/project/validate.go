@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -69,16 +70,25 @@ type validator struct {
 	tables    map[string]map[string]bool // table → columns
 	functions map[string]bool
 	templates map[string]bool
-	relations [][2]string // table pairs, from → to
+	relations []relationEnds
 }
 
-func (v *validator) related(a, b string) bool {
+type relationEnds struct {
+	fromTable, fromColumn, toTable, toColumn string
+}
+
+// linkColumn returns the column of table a that links it to table b, the
+// same relation query.ResolveIncludes picks.
+func (v *validator) linkColumn(a, b string) (string, bool) {
 	for _, r := range v.relations {
-		if (r[0] == a && r[1] == b) || (r[0] == b && r[1] == a) {
-			return true
+		if r.fromTable == a && r.toTable == b {
+			return r.fromColumn, true
+		}
+		if r.fromTable == b && r.toTable == a {
+			return r.toColumn, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func (v *validator) errorf(path, format string, args ...any) {
@@ -207,9 +217,11 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 	for i, r := range asSlice(schema["relations"]) {
 		path := fmt.Sprintf("schema.relations[%d]", i)
 		rm := asMap(r)
-		from, _ := asMap(rm["from"])["table"].(string)
-		to, _ := asMap(rm["to"])["table"].(string)
-		v.relations = append(v.relations, [2]string{from, to})
+		from, to := asMap(rm["from"]), asMap(rm["to"])
+		v.relations = append(v.relations, relationEnds{
+			fromTable: fmt.Sprint(from["table"]), fromColumn: fmt.Sprint(from["column"]),
+			toTable: fmt.Sprint(to["table"]), toColumn: fmt.Sprint(to["column"]),
+		})
 		for _, end := range []string{"from", "to"} {
 			em := asMap(rm[end])
 			table, _ := em["table"].(string)
@@ -594,8 +606,13 @@ func (v *validator) selectOptions(p string, sm map[string]any, table string, col
 			v.errorf(ip+".table", "unknown table %q", rel)
 			continue
 		}
-		if known && !v.related(table, rel) {
-			v.errorf(ip+".table", "no relation between %q and %q", table, rel)
+		if known {
+			link, ok := v.linkColumn(table, rel)
+			if !ok {
+				v.errorf(ip+".table", "no relation between %q and %q", table, rel)
+			} else if selected := asSlice(sm["columns"]); len(selected) > 0 && !slices.Contains(selected, any(link)) {
+				v.errorf(p+".columns", "including %q needs the link column %q in columns", rel, link)
+			}
 		}
 		for _, c := range asSlice(im["columns"]) {
 			if cs, _ := c.(string); !relCols[cs] {

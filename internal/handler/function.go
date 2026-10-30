@@ -113,7 +113,7 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 			if fromQuery {
 				data = allQueryParams(r)
 				for k, def := range matchedFunc.Route.URLParams {
-					if _, sent := data[k]; !sent && def != "" {
+					if v, sent := data[k]; (!sent || v == "") && def != "" {
 						data[k] = def
 					}
 				}

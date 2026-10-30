@@ -314,7 +314,7 @@ Cron context: only `env.*` and `now` available. No `auth.*`, `request.*`, `query
 - `where`: optional filter (same operators as CRUD API)
 - `order_by`: `"column"` or `"column desc"`, a string or an array (first sorts first)
 - `limit` / `offset`: number or template resolving to a non-negative integer
-- `include`: attaches related rows (needs a relation between the tables) under each row's `<table>` key, e.g. `posts[0].comments`. `columns` defaults to the related table's readable columns
+- `include`: attaches related rows (needs a relation between the tables) under each row's `<table>` key, e.g. `posts[0].comments`. `columns` defaults to the related table's readable columns. If you list `columns` on the step itself, include the link column (e.g. `id` for posts → comments)
 - `single: true`: assigns the first row as an object, or `null` when nothing matched (use for "get by id")
 - `assign`: stores the result array (or one object/null with `single`)
 

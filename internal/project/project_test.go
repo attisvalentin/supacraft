@@ -256,7 +256,9 @@ func TestValidate_PipelineCore(t *testing.T) {
   "schema": {
     "tables": [
       {"name": "posts", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "title", "type": "text"}]},
-      {"name": "tags", "columns": [{"name": "id", "type": "uuid", "primary": true}]}]
+      {"name": "tags", "columns": [{"name": "id", "type": "uuid", "primary": true}]},
+      {"name": "comments", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "post_id", "type": "uuid"}]}],
+    "relations": [{"from": {"table": "comments", "column": "post_id"}, "to": {"table": "posts", "column": "id"}, "type": "one-to-many"}]
   },
   "functions": {
     "a": {"route": {"path": "/fn/posts/{id}", "method": "GET",
@@ -264,6 +266,7 @@ func TestValidate_PipelineCore(t *testing.T) {
       "steps": [
         {"type": "db.select", "table": "posts", "order_by": ["nope desc", "title sideways"], "limit": -1, "include": [{"table": "tags"}]},
         {"type": "db.aggregate", "table": "posts", "aggregates": {"n": "median:title"}},
+        {"type": "db.select", "table": "comments", "columns": ["id"], "include": [{"table": "posts"}]},
         {"type": "transaction", "steps": [{"type": "http.request", "url": "https://x.y"}, {"type": "response"}]},
         {"type": "fail", "status_code": 200},
         {"type": "try", "as": "bad name", "steps": [{"type": "fail"}]}]},
@@ -279,10 +282,11 @@ func TestValidate_PipelineCore(t *testing.T) {
 		"functions.a.steps[0].limit",
 		"functions.a.steps[0].include[0].table",
 		"functions.a.steps[1].aggregates.n",
-		"functions.a.steps[2].steps[0]",
-		"functions.a.steps[2].steps[1]",
-		"functions.a.steps[3].status_code",
-		"functions.a.steps[4].as",
+		"functions.a.steps[2].columns",
+		"functions.a.steps[3].steps[0]",
+		"functions.a.steps[3].steps[1]",
+		"functions.a.steps[4].status_code",
+		"functions.a.steps[5].as",
 		"functions.c.route.path",
 	}
 	got := map[string]bool{}
