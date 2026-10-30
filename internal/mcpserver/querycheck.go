@@ -103,7 +103,13 @@ func protectedRoots(ctx context.Context, db *sql.DB) (map[int64]rootInfo, error)
 		}
 		entries = append(entries, e)
 	}
+	// A partial scan could miss a protected root page and let a read
+	// through, so any iteration error fails the check.
+	err = rows.Err()
 	rows.Close()
+	if err != nil {
+		return nil, err
+	}
 
 	roots := map[int64]rootInfo{}
 	for _, e := range entries {
