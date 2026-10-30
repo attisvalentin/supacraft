@@ -213,7 +213,7 @@ from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a
 | `update_api_settings`, `set_auth` | Permissions, CORS, rate limits, email, storage, env |
 | `validate`, `apply` | Check, or apply hand-made edits |
 | `call_endpoint` | Send a real HTTP request to the running API |
-| `query_db` | Read-only SQL against the database |
+| `query_db` | Read-only SQL against the database (the JWT key and password hashes are not readable) |
 | `get_logs` | Recent API errors |
 
 The full `supacraft.json` reference is [internal/docs/reference.md](internal/docs/reference.md).
