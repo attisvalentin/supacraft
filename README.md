@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/supacraft-mark-white.svg">
+  <img src="assets/brand/supacraft-mark.svg" alt="SupaCraft logo: an octopus" width="120">
+</picture>
+
 # SupaCraft
 
 **Describe a backend in plain English. Get a running REST API.**
