@@ -49,11 +49,12 @@ func loadProject() (*project.Project, error) {
 
 // serverConfig derives the API server config from the project, keeping all
 // runtime state under the project's .supacraft directory.
-func serverConfig(p *project.Project, port string) (*config.Config, error) {
+func serverConfig(p *project.Project, host, port string) (*config.Config, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
+	cfg.Host = host
 	cfg.Port = port
 	cfg.DataDir = p.DataDir()
 	cfg.ErrorLogDB = filepath.Join(cfg.DataDir, "errors.db")

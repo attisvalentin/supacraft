@@ -46,7 +46,7 @@ func ApplyCursor(cursor *Cursor, paramOffset int) (string, []any) {
 		op = "<"
 	}
 	_ = paramOffset
-	sql := fmt.Sprintf("%q %s ?", cursor.Column, op)
+	sql := fmt.Sprintf("%s %s ?", QuoteIdent(cursor.Column), op)
 	return sql, []any{cursor.Value}
 }
 

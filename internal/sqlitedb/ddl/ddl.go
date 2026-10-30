@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/attisvalentin/supacraft/internal/config"
+	"github.com/attisvalentin/supacraft/internal/query"
 	"github.com/attisvalentin/supacraft/internal/sqlitedb"
 )
 
@@ -218,7 +219,7 @@ func introspect(ctx context.Context, db *sql.DB) (map[string]map[string]bool, er
 
 	out := map[string]map[string]bool{}
 	for _, name := range names {
-		colRows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%q)", name))
+		colRows, err := db.QueryContext(ctx, "PRAGMA table_info("+query.QuoteIdent(name)+")")
 		if err != nil {
 			return nil, err
 		}
@@ -246,14 +247,14 @@ func createTableSQL(t Table) string {
 	for _, c := range t.Columns {
 		defs = append(defs, columnDef(c))
 	}
-	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %q (\n  %s\n)",
-		t.Name,
+	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n  %s\n)",
+		query.QuoteIdent(t.Name),
 		strings.Join(defs, ",\n  "),
 	)
 }
 
 func alterAddColumnSQL(tableName string, c Column) string {
-	return fmt.Sprintf("ALTER TABLE %q ADD COLUMN %s", tableName, columnDef(c))
+	return fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", query.QuoteIdent(tableName), columnDef(c))
 }
 
 // uuidV4Expr is a SQLite expression that generates an RFC-4122 v4 UUID. SQLite
@@ -265,7 +266,7 @@ const uuidV4Expr = "lower(hex(randomblob(4))||'-'||hex(randomblob(2))||'-4'||" +
 
 func columnDef(c Column) string {
 	isPrimary := c.Primary || c.Type == "primary"
-	parts := []string{fmt.Sprintf("%q %s", c.Name, sqliteType(c.Type))}
+	parts := []string{fmt.Sprintf("%s %s", query.QuoteIdent(c.Name), sqliteType(c.Type))}
 	if isPrimary {
 		parts = append(parts, "PRIMARY KEY")
 	}

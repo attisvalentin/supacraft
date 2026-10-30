@@ -20,6 +20,7 @@ import (
 
 var (
 	studioPort   string
+	studioHost   string
 	studioNoOpen bool
 	studioProxy  string
 )
@@ -62,11 +63,12 @@ STUDIO_SECRET (a random one is generated and printed when it isn't set).
 		}
 		defer src.Close()
 
-		ln, err := net.Listen("tcp", ":"+studioPort)
+		addr := net.JoinHostPort(studioHost, studioPort)
+		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			return fmt.Errorf("cannot bind :%s: %w", studioPort, err)
+			return fmt.Errorf("cannot bind %s: %w", addr, err)
 		}
-		srv := &http.Server{Handler: studio.NewServer(src, secret).Handler()}
+		srv := &http.Server{Handler: studio.NewServer(src, secret).Handler(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				fmt.Fprintf(os.Stderr, "studio server error: %v\n", err)
@@ -93,6 +95,7 @@ STUDIO_SECRET (a random one is generated and printed when it isn't set).
 
 func init() {
 	studioCmd.Flags().StringVar(&studioPort, "port", "4983", "studio port")
+	studioCmd.Flags().StringVar(&studioHost, "host", "127.0.0.1", "interface to listen on (0.0.0.0 = all)")
 	studioCmd.Flags().BoolVar(&studioNoOpen, "no-open", false, "don't open the browser")
 	studioCmd.Flags().StringVar(&studioProxy, "proxy", "", "browse a remote SupaCraft API instead of the local database")
 	rootCmd.AddCommand(studioCmd)

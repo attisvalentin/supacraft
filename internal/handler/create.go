@@ -95,7 +95,7 @@ func readInsertedRow(r *http.Request, dbPool *tenant.DB, table *tenant.SchemaTab
 		return nil, fmt.Errorf("last_insert_rowid: %v", err)
 	}
 
-	selectSQL := fmt.Sprintf("SELECT * FROM %q WHERE rowid = ?", table.Name)
+	selectSQL := "SELECT * FROM " + query.QuoteIdent(table.Name) + " WHERE rowid = ?"
 	rows, err := dbPool.Query(r.Context(), selectSQL, lastID)
 	if err != nil {
 		return nil, fmt.Errorf("select inserted: %v", err)

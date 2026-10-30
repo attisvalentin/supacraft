@@ -30,7 +30,7 @@ func BuildWhere(where map[string]any, table *tenant.SchemaTable, paramOffset int
 			return "", nil, fmt.Errorf("cannot filter on non-readable column: %s", colName)
 		}
 
-		quotedCol := fmt.Sprintf("%q", colName)
+		quotedCol := QuoteIdent(colName)
 
 		opMap, isOp := value.(map[string]any)
 		if !isOp {

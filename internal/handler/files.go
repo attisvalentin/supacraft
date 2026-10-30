@@ -188,7 +188,15 @@ func HandleFileDownload(pool *tenant.PoolManager, serverCfg *config.Config) http
 		buf = buf[:n]
 		contentType := http.DetectContentType(buf)
 
+		// Uploaded files are untrusted. Never let one run as a page on the
+		// API's origin: no sniffing, a sandboxing CSP, and markup is downloaded
+		// instead of rendered.
 		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+		if !servedInline(contentType) {
+			w.Header().Set("Content-Disposition", "attachment")
+		}
 		w.WriteHeader(http.StatusOK)
 
 		// Stream: first the buffered bytes, then the rest
@@ -274,6 +282,18 @@ func generateUUID() string {
 
 // extensionFromMIME returns a file extension for the detected MIME type.
 // Falls back to the original filename's extension if MIME lookup fails.
+// servedInline reports whether a sniffed type is passive media a browser may
+// display in place. Everything else, including text (sniffing reports SVG
+// without an XML declaration and most JavaScript as text/plain), downloads.
+func servedInline(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "svg") || strings.Contains(ct, "xml") {
+		return false
+	}
+	return strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "audio/") ||
+		strings.HasPrefix(ct, "video/") || ct == "application/ogg" || ct == "application/pdf"
+}
+
 func extensionFromMIME(mimeType, originalFilename string) string {
 	// Common MIME → extension map (stdlib sometimes returns less common variants)
 	commonExts := map[string]string{

@@ -11,14 +11,20 @@ import (
 )
 
 type Config struct {
-	AppEnv       string
-	Port         string
-	DataDir      string
-	ErrorLogDB   string
-	StoragePath  string
-	MaxFileSize  int64
+	AppEnv string
+	// Host is the interface the API listens on ("" = all interfaces).
+	Host        string
+	Port        string
+	DataDir     string
+	ErrorLogDB  string
+	StoragePath string
+	MaxFileSize int64
+	// MaxBodySize caps JSON request bodies (file uploads use MaxFileSize).
+	MaxBodySize  int64
 	StudioSecret string
 	DisableCron  bool
+	// TrustProxy makes rate limits key on X-Real-IP / X-Forwarded-For.
+	TrustProxy bool
 	// DefaultTenant is used when a request has no X-Tenant-ID header, so a
 	// single-project server can be called without it.
 	DefaultTenant string
@@ -29,6 +35,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		AppEnv:  os.Getenv("APP_ENV"),
+		Host:    os.Getenv("HOST"),
 		Port:    os.Getenv("PORT"),
 		DataDir: os.Getenv("DATA_DIR"),
 	}
@@ -63,6 +70,15 @@ func Load() (*Config, error) {
 		cfg.StoragePath = abs
 	}
 
+	cfg.MaxBodySize = 1 << 20
+	if v := os.Getenv("MAX_BODY_SIZE"); v != "" {
+		size, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("MAX_BODY_SIZE must be a number: %w", err)
+		}
+		cfg.MaxBodySize = size
+	}
+
 	cfg.MaxFileSize = 100 * 1024 * 1024
 	if maxSize := os.Getenv("MAX_FILE_SIZE"); maxSize != "" {
 		size, err := strconv.ParseInt(maxSize, 10, 64)
@@ -74,9 +90,12 @@ func Load() (*Config, error) {
 
 	cfg.DefaultTenant = os.Getenv("DEFAULT_TENANT")
 
+	// Only trust X-Forwarded-For / X-Real-IP when a reverse proxy sets them.
+	cfg.TrustProxy = isTrue(os.Getenv("TRUST_PROXY"))
+
 	cfg.DisableCron = false
 	if v := os.Getenv("DISABLE_CRON"); v != "" {
-		cfg.DisableCron = strings.EqualFold(v, "1") || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+		cfg.DisableCron = isTrue(v)
 	}
 
 	return cfg, nil
@@ -96,4 +115,8 @@ func defaultDataDir() string {
 		return "./data"
 	}
 	return filepath.Join(home, ".supacraft", "data")
+}
+
+func isTrue(v string) bool {
+	return strings.EqualFold(v, "1") || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
 }

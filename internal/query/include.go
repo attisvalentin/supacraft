@@ -15,6 +15,14 @@ type IncludeRequest struct {
 	Select  []string `json:"select"`
 }
 
+// IncludeAuthorizer decides whether a related table may be included. It
+// returns the extra WHERE fragment (e.g. the table's row policy) to apply, or
+// an error when the caller may not read the table.
+type IncludeAuthorizer func(table *tenant.SchemaTable) (policySQL string, policyArgs []any, err error)
+
+// ErrIncludeForbidden is returned when the authorizer rejects a table.
+var ErrIncludeForbidden = fmt.Errorf("included table is not accessible")
+
 func ResolveIncludes(
 	ctx context.Context,
 	dbPool *tenant.DB,
@@ -23,11 +31,20 @@ func ResolveIncludes(
 	includes []IncludeRequest,
 	sch *tenant.Schema,
 	loc *time.Location,
+	authorize IncludeAuthorizer,
 ) error {
 	for _, inc := range includes {
 		relatedTable, err := schema.FindTable(sch, inc.TableID)
 		if err != nil {
 			return fmt.Errorf("included table not found: %s", inc.TableID)
+		}
+		// Authorize first, so callers can't probe a protected table's columns.
+		policySQL, policyArgs, err := authorize(relatedTable)
+		if err != nil {
+			return err
+		}
+		if err := schema.ValidateSelectColumns(inc.Select, relatedTable); err != nil {
+			return err
 		}
 
 		rel, fromMain, err := findRelation(sch, mainTableUUID, inc.TableID)
@@ -87,21 +104,26 @@ func ResolveIncludes(
 
 		quoted := make([]string, len(columns))
 		for i, c := range columns {
-			quoted[i] = fmt.Sprintf("%q", c)
+			quoted[i] = QuoteIdent(c)
 		}
 		placeholders := make([]string, len(linkValues))
 		for i := range linkValues {
 			placeholders[i] = "?"
 		}
 
-		sql := fmt.Sprintf("SELECT %s FROM %q WHERE %q IN (%s)",
+		sql := fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (%s)",
 			strings.Join(quoted, ", "),
-			relatedTable.Name,
-			relatedColName,
+			QuoteIdent(relatedTable.Name),
+			QuoteIdent(relatedColName),
 			strings.Join(placeholders, ", "),
 		)
+		args := linkValues
+		if policySQL != "" {
+			sql += " AND (" + policySQL + ")"
+			args = append(args, policyArgs...)
+		}
 
-		rows, err := dbPool.Query(ctx, sql, linkValues...)
+		rows, err := dbPool.Query(ctx, sql, args...)
 		if err != nil {
 			return fmt.Errorf("include query failed for %s: %w", relatedTable.Name, err)
 		}
