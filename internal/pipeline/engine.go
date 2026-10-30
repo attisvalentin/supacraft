@@ -21,7 +21,7 @@ var ErrResponseSent = errors.New("response sent")
 
 // StepDeps bundles all dependencies needed by step executors.
 type StepDeps struct {
-	DBPool            *tenant.DB
+	DBPool            tenant.Querier
 	Schema            *tenant.Schema
 	Config            *tenant.TenantConfig
 	Mailer            Mailer
@@ -34,6 +34,8 @@ type StepDeps struct {
 	FunctionID        string
 	FunctionName      string
 	Timezone          *time.Location
+	// InTransaction is set inside a transaction step; DBPool is then a *tenant.Tx.
+	InTransaction bool
 
 	// CapturedResponse holds the response data when executing in nested mode
 	// (function.call). When ResponseWriter is nil, the response step stores
@@ -60,15 +62,26 @@ func Execute(ctx context.Context, steps []tenant.FunctionStep, pCtx *PipelineCon
 }
 
 func executeStep(ctx context.Context, step *tenant.FunctionStep, pCtx *PipelineContext, deps *StepDeps) error {
+	if deps.InTransaction && !StepAllowedInTransaction(step.Type) {
+		return fmt.Errorf("%s is not allowed inside a transaction; move it after the transaction step", step.Type)
+	}
 	switch step.Type {
 	case "db.select":
 		return ExecuteDBSelect(ctx, step, pCtx, deps)
+	case "db.aggregate":
+		return ExecuteDBAggregate(ctx, step, pCtx, deps)
 	case "db.insert":
 		return ExecuteDBInsert(ctx, step, pCtx, deps)
 	case "db.update":
 		return ExecuteDBUpdate(ctx, step, pCtx, deps)
 	case "db.delete":
 		return ExecuteDBDelete(ctx, step, pCtx, deps)
+	case "transaction":
+		return ExecuteTransaction(ctx, step, pCtx, deps)
+	case "try":
+		return ExecuteTry(ctx, step, pCtx, deps)
+	case "fail":
+		return ExecuteFail(ctx, step, pCtx, deps)
 	case "if":
 		return ExecuteIf(ctx, step, pCtx, deps)
 	case "foreach":

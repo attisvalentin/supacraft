@@ -25,7 +25,7 @@ var ErrIncludeForbidden = fmt.Errorf("included table is not accessible")
 
 func ResolveIncludes(
 	ctx context.Context,
-	dbPool *tenant.DB,
+	dbPool tenant.Querier,
 	mainTableUUID string,
 	mainResults []map[string]any,
 	includes []IncludeRequest,

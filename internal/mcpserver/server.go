@@ -164,7 +164,7 @@ func (s *server) register(srv *mcp.Server) {
 			})
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "set_function", Description: "Create or replace a pipeline function by name: {route:{path:\"/fn/...\", method, auth_required, url_params?}, steps:[...]}. See supacraft://reference for step types."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_function", Description: "Create or replace a pipeline function by name: {route:{path:\"/fn/...\" (segments like {id} become {{params.id}}), method, auth_required, input?, url_params?}, steps:[...]}. See supacraft://reference for step types."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Name     string         `json:"name"`
 			Function map[string]any `json:"function"`

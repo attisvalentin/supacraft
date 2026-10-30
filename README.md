@@ -42,7 +42,7 @@ want a real backend in minutes rather than days and you don't want to run anyone
 |---|---|
 | 🗄️ **Database** | SQLite tables generated from your schema, migrated automatically when you add tables or columns |
 | 🔐 **Auth** | `/auth/register`, `/auth/login`, `/auth/refresh` with JWT; per-endpoint auth and row-level policies |
-| ⚡ **Custom endpoints** | `/fn/...` routes built from steps: query, insert, if/else, loops, math, HTTP calls, emails |
+| ⚡ **Custom endpoints** | `/fn/posts/{id}` routes built from steps: queries with joins and aggregates, transactions, input validation, if/else, loops, try/catch, math, HTTP calls, emails |
 | ⏰ **Cron jobs** | The same steps on a schedule (`0 3 * * *`) |
 | 📁 **File storage** | Upload/download endpoints backed by local disk, S3/R2/MinIO, GCS, Azure, FTP or SFTP |
 | ✉️ **Email** | SMTP with templates |
@@ -131,12 +131,25 @@ This file is a working blog API with users, posts and two endpoints:
     "list_posts": {
       "route": { "path": "/fn/posts", "method": "GET" },
       "steps": [
-        { "type": "db.select", "table": "posts", "assign": "posts" },
+        { "type": "db.select", "table": "posts", "order_by": "created_at desc", "limit": 20, "assign": "posts" },
         { "type": "response", "status_code": 200, "data": { "posts": "{{posts}}" } }
       ]
     },
+    "get_post": {
+      "route": { "path": "/fn/posts/{id}", "method": "GET" },
+      "steps": [
+        { "type": "db.select", "table": "posts", "where": { "id": "{{params.id}}" }, "single": true, "assign": "post" },
+        { "type": "if", "condition": "{{post}} == null", "then": [
+          { "type": "fail", "status_code": 404, "message": "post not found" }
+        ] },
+        { "type": "response", "status_code": 200, "data": { "post": "{{post}}" } }
+      ]
+    },
     "create_post": {
-      "route": { "path": "/fn/posts", "method": "POST", "auth_required": true },
+      "route": {
+        "path": "/fn/posts", "method": "POST", "auth_required": true,
+        "input": { "title": { "type": "string", "required": true, "min": 1, "max": 200 } }
+      },
       "steps": [
         {
           "type": "db.insert", "table": "posts", "assign": "post",

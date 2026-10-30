@@ -46,6 +46,7 @@ func ExecuteFunctionCall(ctx context.Context, step *tenant.FunctionStep, pCtx *P
 		FunctionID:        step.FunctionID,
 		FunctionName:      fn.Name,
 		Timezone:          deps.Timezone,
+		InTransaction:     deps.InTransaction,
 	}
 
 	// Execute sub-function
