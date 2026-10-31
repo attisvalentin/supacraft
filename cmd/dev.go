@@ -6,19 +6,23 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/attisvalentin/supacraft/internal/app"
 	"github.com/attisvalentin/supacraft/internal/project"
+	"github.com/attisvalentin/supacraft/internal/tenant"
 	"github.com/spf13/cobra"
 )
 
 var (
-	servePort   string
-	serveNoCron bool
-	devHost     string
-	serveHost   string
+	servePort     string
+	serveNoCron   bool
+	devHost       string
+	serveHost     string
+	serveDataDir  string
+	serveDefaultT string
 )
 
 var devCmd = &cobra.Command{
@@ -31,8 +35,19 @@ var devCmd = &cobra.Command{
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Apply supacraft.json and run the API (production)",
+	Short: "Run the API in production: one project, or every tenant in a data directory",
+	Long: `Without --data-dir, applies supacraft.json and serves that one project.
+
+With --data-dir, serves every tenant in a central data directory from one
+process, picked per request by the X-Tenant-ID header. Add or update a
+tenant with "supacraft apply --data-dir" (or a deploy); the server picks it
+up without a restart.
+
+  supacraft serve --data-dir /var/lib/supacraft`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if serveDataDir != "" {
+			return runCentral()
+		}
 		return runServer(false)
 	},
 }
@@ -42,6 +57,8 @@ func init() {
 	// serve is the production entry point and listens on all interfaces.
 	devCmd.Flags().StringVar(&devHost, "host", envOr("HOST", "127.0.0.1"), "interface to listen on (0.0.0.0 = all)")
 	serveCmd.Flags().StringVar(&serveHost, "host", envOr("HOST", "0.0.0.0"), "interface to listen on")
+	serveCmd.Flags().StringVar(&serveDataDir, "data-dir", os.Getenv("SUPACRAFT_DATA_DIR"), "serve every tenant in this central data directory (env SUPACRAFT_DATA_DIR)")
+	serveCmd.Flags().StringVar(&serveDefaultT, "default-tenant", os.Getenv("DEFAULT_TENANT"), "with --data-dir: tenant for requests without X-Tenant-ID")
 	for _, c := range []*cobra.Command{devCmd, serveCmd} {
 		c.Flags().StringVarP(&servePort, "port", "p", envOr("PORT", "8080"), "HTTP port")
 		c.Flags().BoolVar(&serveNoCron, "no-cron", false, "don't run cron jobs")
@@ -92,6 +109,73 @@ func runServer(watch bool) error {
 		})
 	}
 	return <-stopped
+}
+
+// runCentral serves every tenant in serveDataDir and reloads when a tenant
+// config is added, changed, disabled or removed.
+func runCentral() error {
+	cfg, err := centralConfig(serveDataDir, serveHost, servePort)
+	if err != nil {
+		return err
+	}
+	cfg.DefaultTenant = serveDefaultT
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	srv, stopped, err := app.Start(ctx, cfg, !serveNoCron)
+	if err != nil {
+		return err
+	}
+	tenants, err := tenant.ListTenants(ctx, cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("SupaCraft API on http://%s serving %s (%d tenants)\n", srv.Addr, cfg.DataDir, len(tenants))
+	for _, t := range tenants {
+		state := ""
+		if t.Disabled {
+			state = " (disabled)"
+		}
+		fmt.Printf("  • %s%s\n", t.ID, state)
+	}
+	if cfg.DefaultTenant == "" {
+		fmt.Println("Requests choose a tenant with the X-Tenant-ID header.")
+	}
+	go watchTenants(ctx, cfg.DataDir, func() {
+		fmt.Println("↻ tenants changed, reloading")
+		srv.Reload(ctx)
+	})
+	return <-stopped
+}
+
+// watchTenants polls the tenants directory and calls onChange after any
+// config or disabled marker changes.
+func watchTenants(ctx context.Context, dataDir string, onChange func()) {
+	dir := filepath.Join(dataDir, "tenants")
+	snapshot := func() string {
+		entries, _ := os.ReadDir(dir)
+		var s strings.Builder
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil && !strings.HasSuffix(e.Name(), ".tmp") {
+				fmt.Fprintf(&s, "%s|%s|%d;", e.Name(), info.ModTime(), info.Size())
+			}
+		}
+		return s.String()
+	}
+	last := snapshot()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if now := snapshot(); now != last {
+				last = now
+				onChange()
+			}
+		}
+	}
 }
 
 // watchProject polls supacraft.json and .env and calls onChange after edits.

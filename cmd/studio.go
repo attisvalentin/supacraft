@@ -23,6 +23,7 @@ var (
 	studioHost   string
 	studioNoOpen bool
 	studioProxy  string
+	studioData   string
 )
 
 var studioCmd = &cobra.Command{
@@ -51,6 +52,8 @@ STUDIO_SECRET (a random one is generated and printed when it isn't set).
 				return errors.New("--proxy needs STUDIO_SECRET set to the remote server's secret")
 			}
 			src, err = studio.NewProxySource(studioProxy, secret)
+		} else if studioData != "" {
+			src, err = studio.NewSQLiteSource(&config.Config{DataDir: studioData})
 		} else {
 			p, perr := loadProject()
 			if perr != nil {
@@ -98,5 +101,6 @@ func init() {
 	studioCmd.Flags().StringVar(&studioHost, "host", "127.0.0.1", "interface to listen on (0.0.0.0 = all)")
 	studioCmd.Flags().BoolVar(&studioNoOpen, "no-open", false, "don't open the browser")
 	studioCmd.Flags().StringVar(&studioProxy, "proxy", "", "browse a remote SupaCraft API instead of the local database")
+	studioCmd.Flags().StringVar(&studioData, "data-dir", "", "browse every tenant in a central data directory")
 	rootCmd.AddCommand(studioCmd)
 }

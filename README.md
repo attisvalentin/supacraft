@@ -202,12 +202,13 @@ The `users` table and the auth endpoints come from `"auth_enabled": true`; you d
 |---|---|
 | `supacraft init [name]` | Create a new project (`--auth=false` to skip built-in users) |
 | `supacraft dev` | Run the API and re-apply `supacraft.json` / `.env` on every change |
-| `supacraft serve` | Apply once and run the API (production) |
+| `supacraft serve` | Apply once and run the API (production); `--data-dir` serves every tenant of a central server |
 | `supacraft mcp` | MCP server for AI agents on stdio; also serves the API |
 | `supacraft validate` | Check `supacraft.json` and print errors and warnings |
-| `supacraft apply` | Migrate the database and write the compiled config |
+| `supacraft apply` | Migrate the database and write the compiled config (`--data-dir` = into a central server) |
+| `supacraft tenants` | `list`, `disable`, `enable`, `remove [--purge]` tenants of a central server |
 | `supacraft studio` | Open a read-only data browser |
-| `supacraft service install` | Install `serve` as a systemd service (Linux) |
+| `supacraft service install` | Install `serve` as a systemd service (Linux); `--data-dir` for a central server |
 
 Every command accepts `--dir` / `-C` to point at a project directory.
 
@@ -251,6 +252,41 @@ SMTP_PASSWORD=...
 ```
 
 ## Deploying
+
+### Many APIs on one server
+
+One `supacraft serve` process can run every API you have. Each project is a **tenant** in a
+central data directory, and the `X-Tenant-ID` header of each request picks the API:
+
+```bash
+# on the server, once
+sudo supacraft service install --data-dir /var/lib/supacraft
+
+# add or update an API: validates, creates or migrates its database, goes live without a restart
+supacraft apply -C ./shop --data-dir /var/lib/supacraft
+
+curl -H "X-Tenant-ID: shop" https://api.example.com/fn/products
+```
+
+```text
+/var/lib/supacraft/
+├── tenants/shop.json   ← compiled config of each tenant
+├── tenants/blog.json
+├── shop.db             ← one SQLite database per tenant
+├── blog.db
+├── storage/<tenant>/   ← uploaded files
+└── errors.db
+```
+
+The tenant id comes from the project name (`"name": "My Shop"` → `my_shop`). Manage tenants with
+`supacraft tenants list | disable <id> | enable <id> | remove <id> [--purge]`. A disabled tenant
+answers `503` and its cron jobs pause until you enable it again; applying it again doesn't re-enable
+it. `remove` keeps the database unless you add `--purge`. Pass `--default-tenant <id>` to
+`serve` if requests without the header should go to one tenant.
+
+Back up the whole data directory, for example with [Litestream](https://litestream.io).
+
+### One project
 
 SupaCraft is a single static binary. Copy your project folder to a server and run:
 

@@ -29,6 +29,20 @@ type Server struct {
 // Reload makes config changes on disk visible immediately.
 func (s *Server) Reload(ctx context.Context) {
 	s.Store.Invalidate()
+	if ids, err := s.Store.ScanTenantIDs(ctx); err == nil {
+		keep := map[string]bool{}
+		for _, id := range ids {
+			if cfg, err := s.Store.GetTenantConfig(ctx, id); err == nil {
+				// Same key as PoolManager.GetPool.
+				name := cfg.DBName
+				if name == "" {
+					name = cfg.Schema.TenantID
+				}
+				keep[name] = true
+			}
+		}
+		s.Pools.Retain(keep)
+	}
 	if s.Crons != nil {
 		s.Crons.Reload(ctx)
 	}

@@ -43,6 +43,32 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&projectDir, "dir", "C", ".", "project directory (containing supacraft.json)")
 }
 
+// centralConfig is the server config for a central data directory that
+// holds many projects' tenants (supacraft serve --data-dir).
+func centralConfig(dataDir, host, port string) (*config.Config, error) {
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return nil, fmt.Errorf("create data dir: %w", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	cfg.Host = host
+	cfg.Port = port
+	cfg.DataDir = abs
+	if os.Getenv("ERROR_LOG_DB") == "" {
+		cfg.ErrorLogDB = filepath.Join(abs, "errors.db")
+	}
+	if os.Getenv("STORAGE_PATH") == "" {
+		cfg.StoragePath = filepath.Join(abs, "storage")
+	}
+	return cfg, nil
+}
+
 func loadProject() (*project.Project, error) {
 	return project.Load(projectDir)
 }

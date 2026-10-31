@@ -45,7 +45,10 @@ var serviceStatusCmd = &cobra.Command{
 	},
 }
 
+var serviceDataDir string
+
 func init() {
+	serviceInstallCmd.Flags().StringVar(&serviceDataDir, "data-dir", "", "run the service for every tenant in this central data directory")
 	serviceCmd.AddCommand(serviceInstallCmd)
 	serviceCmd.AddCommand(serviceUninstallCmd)
 	serviceCmd.AddCommand(serviceStatusCmd)
@@ -71,13 +74,20 @@ func runServiceInstall() error {
 		return fmt.Errorf("failed to detect current user: %w", err)
 	}
 
-	p, err := loadProject()
-	if err != nil {
-		return err
+	var unit string
+	if serviceDataDir != "" {
+		dataDir, err := filepath.Abs(serviceDataDir)
+		if err != nil {
+			return err
+		}
+		unit = generateUnit(binPath, u.Username, u.HomeDir, dataDir, "serve --data-dir "+dataDir)
+	} else {
+		p, err := loadProject()
+		if err != nil {
+			return err
+		}
+		unit = generateUnit(binPath, u.Username, u.HomeDir, p.Dir, "serve --dir "+p.Dir)
 	}
-	workDir := p.Dir
-
-	unit := generateUnit(binPath, u.Username, u.HomeDir, workDir)
 
 	// Write unit file — direct if root, otherwise via sudo tee
 	if os.Getuid() == 0 {
@@ -182,7 +192,7 @@ func sudoCmd(name string, args ...string) *exec.Cmd {
 	return exec.Command("sudo", append([]string{name}, args...)...)
 }
 
-func generateUnit(binPath, username, homeDir, workDir string) string {
+func generateUnit(binPath, username, homeDir, workDir, args string) string {
 	return fmt.Sprintf(`[Unit]
 Description=SupaCraft API Server
 After=network.target
@@ -191,12 +201,12 @@ After=network.target
 Type=simple
 User=%s
 WorkingDirectory=%s
-ExecStart=%s serve --dir %s
+ExecStart=%s %s
 Restart=on-failure
 RestartSec=5
 Environment=HOME=%s
 
 [Install]
 WantedBy=multi-user.target
-`, username, workDir, binPath, workDir, homeDir)
+`, username, workDir, binPath, args, homeDir)
 }

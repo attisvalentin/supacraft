@@ -61,6 +61,9 @@ func (s *FileStore) GetTenantConfig(ctx context.Context, tenantID string) (*Tena
 	if cfg.Schema.TenantID == "" {
 		cfg.Schema.TenantID = tenantID
 	}
+	if isDisabled(filepath.Dir(s.dir), tenantID) {
+		cfg.Enabled = false
+	}
 	return &cfg, nil
 }
 

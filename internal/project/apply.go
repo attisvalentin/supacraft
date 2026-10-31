@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,27 @@ type ApplyResult struct {
 // new tables and columns) and writes the compiled tenant config the API
 // server reads. A running server picks the change up on its next cache miss.
 func (p *Project) Apply(ctx context.Context) (*ApplyResult, error) {
+	return p.ApplyTo(ctx, "", false)
+}
+
+// ErrTenantTaken is returned when a shared data directory already has a
+// tenant with this project's id but a different project name.
+var ErrTenantTaken = errors.New("tenant id is used by another project")
+
+// ApplyTo is Apply into dataDir, a central data directory shared by many
+// projects ("" = the project's own .supacraft). Only the project's own
+// directory is pruned of other tenants' configs. In a shared directory a
+// tenant with the same id but another project name is only replaced when
+// replace is set, so two projects can't silently overwrite each other.
+func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*ApplyResult, error) {
+	own := dataDir == ""
+	if own {
+		dataDir = p.DataDir()
+	} else if !replace {
+		if other := existingName(dataDir, p.TenantID()); other != "" && other != p.Name() {
+			return nil, fmt.Errorf("%w: %q already serves project %q (rename this project or pass --replace)", ErrTenantTaken, p.TenantID(), other)
+		}
+	}
 	if issues := p.Validate(); HasErrors(issues) {
 		return nil, &ValidationError{Issues: issues}
 	}
@@ -34,7 +56,7 @@ func (p *Project) Apply(ctx context.Context) (*ApplyResult, error) {
 		return nil, err
 	}
 
-	cfg := &config.Config{DataDir: p.DataDir()}
+	cfg := &config.Config{DataDir: dataDir}
 	prov := sqlitedb.New(cfg)
 	dbName := p.TenantID()
 	res := &ApplyResult{
@@ -81,15 +103,31 @@ func (p *Project) Apply(ctx context.Context) (*ApplyResult, error) {
 		}
 	}
 
-	if err := writeTenant(cfg.DataDir, dbName, compiled.Payload); err != nil {
+	if err := writeTenant(cfg.DataDir, dbName, compiled.Payload, own); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// writeTenant writes {dataDir}/tenants/{id}.json atomically and removes any
-// other tenant files, so renaming a project doesn't leave a stale tenant.
-func writeTenant(dataDir, id string, payload map[string]any) error {
+// existingName is the project name of tenant id in dataDir, or "".
+func existingName(dataDir, id string) string {
+	data, err := os.ReadFile(filepath.Join(dataDir, "tenants", id+".json"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		DisplayName string `json:"display_name"`
+	}
+	if json.Unmarshal(data, &cfg) != nil {
+		return ""
+	}
+	return cfg.DisplayName
+}
+
+// writeTenant writes {dataDir}/tenants/{id}.json atomically. With prune it
+// removes every other tenant file, so renaming a project doesn't leave a
+// stale tenant in the project's own directory. Never prune a shared one.
+func writeTenant(dataDir, id string, payload map[string]any, prune bool) error {
 	dir := filepath.Join(dataDir, "tenants")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -114,6 +152,9 @@ func writeTenant(dataDir, id string, payload map[string]any) error {
 		return err
 	}
 
+	if !prune {
+		return nil
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err

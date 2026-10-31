@@ -35,7 +35,13 @@ var applyCmd = &cobra.Command{
 	Long: `Validates supacraft.json, creates missing tables and columns in the SQLite
 database (additive only) and writes the config the API server reads.
 A running server picks the change up within 30 seconds; supacraft dev
-applies automatically on every save.`,
+applies automatically on every save.
+
+With --data-dir, applies the project as one tenant of a central data
+directory served by "supacraft serve --data-dir"; other tenants there are
+left alone.
+
+  supacraft apply --data-dir /var/lib/supacraft`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		p, err := loadProject()
 		if err != nil {
@@ -46,7 +52,14 @@ applies automatically on every save.`,
 	},
 }
 
+var (
+	applyDataDir string
+	applyReplace bool
+)
+
 func init() {
+	applyCmd.Flags().BoolVar(&applyReplace, "replace", false, "with --data-dir: replace a tenant with the same id from another project")
+	applyCmd.Flags().StringVar(&applyDataDir, "data-dir", "", "apply into this central data directory instead of the project's .supacraft")
 	rootCmd.AddCommand(validateCmd, applyCmd)
 }
 
@@ -54,7 +67,13 @@ func applyAndReport(ctx context.Context, p *project.Project) (*project.ApplyResu
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	res, err := p.Apply(ctx)
+	var res *project.ApplyResult
+	var err error
+	if applyDataDir != "" {
+		res, err = p.ApplyTo(ctx, applyDataDir, applyReplace)
+	} else {
+		res, err = p.Apply(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +85,10 @@ func applyAndReport(ctx context.Context, p *project.Project) (*project.ApplyResu
 	}
 	for _, name := range res.MissingEnv {
 		fmt.Printf("  ⚠ ${%s} is not set in .env\n", name)
+	}
+	if applyDataDir != "" {
+		fmt.Printf("✓ Applied %s as tenant %q in %s\n", p.Name(), res.TenantID, applyDataDir)
+		return res, nil
 	}
 	fmt.Printf("✓ Applied %s\n", p.Name())
 	return res, nil

@@ -140,6 +140,18 @@ func (pm *PoolManager) GetPool(ctx context.Context, cfg *TenantConfig) (*DB, err
 	return entry.db, nil
 }
 
+// Retain closes the pools of databases not in keep, e.g. tenants removed
+// from a central data directory, so a purged database file isn't kept open.
+func (pm *PoolManager) Retain(keep map[string]bool) {
+	pm.pools.Range(func(key, value any) bool {
+		if !keep[key.(string)] {
+			value.(*poolEntry).db.Close()
+			pm.pools.Delete(key)
+		}
+		return true
+	})
+}
+
 // StartEvictor closes pools that have been idle longer than 30 minutes.
 func (pm *PoolManager) StartEvictor(ctx context.Context) {
 	go func() {
