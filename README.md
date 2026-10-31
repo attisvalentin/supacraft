@@ -52,7 +52,7 @@ want a real backend in minutes rather than days and you don't want to run anyone
 | ✉️ **Email** | SMTP with templates |
 | 🤖 **AI-native** | Built-in MCP server: the agent edits, validates, migrates, calls endpoints and queries data |
 | 🔍 **Studio** | Read-only web UI to browse your data |
-| 🏢 **Many APIs, one server** | One `serve` process hosts every project; `supacraft deploy` adds or updates one live, secrets stay on the server |
+| 🏢 **Many APIs, one server** | One `serve` process hosts every project; `supacraft deploy` adds or updates one live; `${NAME}` secrets stay on the server |
 
 ## How it feels
 
@@ -111,14 +111,18 @@ and describe what you want. The agent starts `supacraft mcp`, which also serves 
 supacraft dev    # API on http://localhost:8080, re-applied on every save
 ```
 
-**Ship it.** On your server, start one SupaCraft for all your projects, once:
+**Ship it.** On your server, start one SupaCraft for all your projects, once. Run it as
+your normal (non-root) user; the installer asks for `sudo` itself where it needs it:
 
 ```bash
-sudo supacraft service install --data-dir /var/lib/supacraft
+sudo mkdir -p /var/lib/supacraft && sudo chown "$USER" /var/lib/supacraft
+umask 077 && echo "SUPACRAFT_ADMIN_SECRET=$(openssl rand -hex 32)" > /var/lib/supacraft/.env
+supacraft service install --data-dir /var/lib/supacraft
 ```
 
-Then deploy each project from your machine; no new process, no restart (both sides need the
-same `SUPACRAFT_ADMIN_SECRET`):
+Then deploy each project from your machine; no new process, no restart. Put the same
+`SUPACRAFT_ADMIN_SECRET` in your local `.env`. For a project that defines `GET /fn/posts`
+(like the [complete example](#a-complete-example) below):
 
 ```bash
 supacraft deploy --server https://api.example.com
@@ -301,10 +305,11 @@ One `supacraft serve` process can run every API you have. Each project is a **te
 central data directory, and the `X-Tenant-ID` header of each request picks the API:
 
 ```bash
-# on the server, once
-sudo supacraft service install --data-dir /var/lib/supacraft
-# to manage secrets from your machine (see Secrets), the service reads
+# on the server, once, as a non-root user that owns the directory
+# (the installer uses sudo itself; under sudo the service would run as root).
+# Deploys and secrets from your machine need SUPACRAFT_ADMIN_SECRET in
 # /var/lib/supacraft/.env (chmod 600):  SUPACRAFT_ADMIN_SECRET=<openssl rand -hex 32>
+supacraft service install --data-dir /var/lib/supacraft
 
 # from your machine: add or update an API — the server validates it, creates or migrates
 # its database and serves it within seconds, without a restart
@@ -341,7 +346,7 @@ SupaCraft is a single static binary. Copy your project folder to a server and ru
 
 ```bash
 supacraft serve --port 8080            # or:
-sudo supacraft service install         # systemd, restarts on failure
+supacraft service install              # systemd, restarts on failure (not via sudo)
 ```
 
 Put a reverse proxy (Caddy, nginx) in front for HTTPS. In that setup, run with `--host 127.0.0.1`
