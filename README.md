@@ -254,7 +254,7 @@ STRIPE_KEY=sk_live_...
 SMTP_PASSWORD=...
 ```
 
-On a central server, secrets are kept **only on the server** (`<data-dir>/env/<tenant>.env`, mode
+On a central server, secrets are kept **only on the server** (`<data-dir>/env/<tenant>.json`, mode
 `0600`). Deploys and compiled configs carry just the `${NAME}` references; the server fills them in
 when it loads a tenant, so a new value takes effect within seconds. You set them from your
 machine, typing the value into a hidden prompt:
@@ -301,7 +301,7 @@ curl -H "X-Tenant-ID: shop" https://api.example.com/fn/products
 ├── tenants/blog.json
 ├── shop.db             ← one SQLite database per tenant
 ├── blog.db
-├── env/shop.env        ← server-side secrets of each tenant (0600)
+├── env/shop.json       ← server-side secrets of each tenant (0600)
 ├── storage/<tenant>/   ← uploaded files
 └── errors.db
 ```

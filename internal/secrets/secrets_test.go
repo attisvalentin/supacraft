@@ -18,6 +18,8 @@ func TestRoundTripAndPermissions(t *testing.T) {
 		"F": "007",
 		"G": "+5",
 		"H": `back\slash \n literal`,
+		"I": `ends with backslash\`,
+		"J": "unicode ő 🔑 \t tab",
 	}
 	for k, v := range tricky {
 		if err := s.Set("shop", k, v); err != nil {
@@ -33,7 +35,7 @@ func TestRoundTripAndPermissions(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", k, got[k], v)
 		}
 	}
-	info, err := os.Stat(filepath.Join(dir, "env", "shop.env"))
+	info, err := os.Stat(filepath.Join(dir, "env", "shop.json"))
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("secret file mode %v (%v), want 0600", info.Mode().Perm(), err)
 	}
@@ -44,7 +46,7 @@ func TestRoundTripAndPermissions(t *testing.T) {
 	if err := s.Unset("shop", "A"); err != nil {
 		t.Fatal(err)
 	}
-	if names, _ := s.Names("shop"); len(names) != 7 || names[0] != "B" {
+	if names, _ := s.Names("shop"); len(names) != 9 || names[0] != "B" {
 		t.Fatalf("names after unset: %v", names)
 	}
 	for _, bad := range []string{"../x", "Shop", ""} {

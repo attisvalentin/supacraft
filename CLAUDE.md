@@ -26,7 +26,7 @@ go vet ./...
 - Everything is identified by name (tables, columns, functions, cronjobs); compiled UUID fields equal the name.
 - Migrations are additive only; never emit DROP/RENAME.
 - Quote SQL identifiers with `query.QuoteIdent`, never Go's `%q`. Validate client-supplied column names against the schema before they reach SQL.
-- Secret values never go into tenant configs, deploy payloads, API or MCP responses, or logs. A central server keeps `${NAME}` refs in `tenants/<id>.json` and resolves them from `env/<id>.env` on load (`internal/secrets`, `FileStore`). Report secrets by name only.
+- Secret values never go into tenant configs, deploy payloads, API or MCP responses, or logs. A central server keeps `${NAME}` refs in `tenants/<id>.json` and resolves them from `env/<id>.json` on load (`internal/secrets`, `FileStore`). Report secrets by name only.
 - Anything reachable over HTTP is untrusted: no internal error details in responses (`writeErrorJSON` trims them), and new routes go under the tenant group so they get tenant validation, rate limits and the body cap.
 - In `supacraft mcp`, stdout is the MCP transport — log to stderr only.
 - A new pipeline step type needs: execution in `internal/pipeline/engine.go`, validation in `internal/project/validate.go`, docs in `internal/docs/reference.md`.

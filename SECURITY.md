@@ -8,7 +8,7 @@ Security fixes go into the latest release only. Upgrade with
 
 ## Secrets on a central server
 
-- Secret values live only in `<data-dir>/env/<tenant>.env` (directory `0700`, files `0600`).
+- Secret values live only in `<data-dir>/env/<tenant>.json` (directory `0700`, files `0600`).
   Tenant configs and deploys keep `${NAME}` references; values are filled in when the server
   loads a tenant.
 - `supacraft deploy` sends only `supacraft.json`. The server validates it, refuses a project

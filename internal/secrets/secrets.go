@@ -1,22 +1,21 @@
 // Package secrets stores the server-side values of "${NAME}" references for
 // the tenants of a central data directory, one file per tenant:
-// {dataDir}/env/{tenant}.env, readable only by the server's user. Values
+// {dataDir}/env/{tenant}.json, readable only by the server's user. Values
 // never appear in tenant configs; the tenant store resolves references when
 // it loads a config.
 package secrets
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/attisvalentin/supacraft/internal/envref"
-	"github.com/joho/godotenv"
 )
 
 // tenantRe matches tenant ids (the same rule as the tenant middleware).
@@ -38,7 +37,7 @@ func (s *Store) path(tenantID string) (string, error) {
 	if !tenantRe.MatchString(tenantID) {
 		return "", fmt.Errorf("invalid tenant id %q", tenantID)
 	}
-	return filepath.Join(s.dir, tenantID+".env"), nil
+	return filepath.Join(s.dir, tenantID+".json"), nil
 }
 
 // Values returns a tenant's secrets (empty when none are set).
@@ -47,11 +46,18 @@ func (s *Store) Values(tenantID string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	vals, err := godotenv.Read(p)
+	data, err := os.ReadFile(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil
 	}
-	return vals, err
+	if err != nil {
+		return nil, err
+	}
+	vals := map[string]string{}
+	if err := json.Unmarshal(data, &vals); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", filepath.Base(p), err)
+	}
+	return vals, nil
 }
 
 // Names returns the sorted names of a tenant's secrets.
@@ -140,13 +146,18 @@ func (s *Store) write(tenantID string, vals map[string]string) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return err
 	}
-	content := marshal(vals)
+	// JSON round-trips any value exactly; .env quoting can't (a trailing
+	// backslash, number-like values).
+	content, err := json.MarshalIndent(vals, "", "  ")
+	if err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(s.dir, tenantID+"-*.tmp")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(content); err != nil {
+	if _, err := tmp.Write(append(content, '\n')); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -154,21 +165,4 @@ func (s *Store) write(tenantID string, vals map[string]string) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), p)
-}
-
-// marshal writes every value double-quoted with the escapes godotenv.Read
-// understands. godotenv.Marshal is not used: it rewrites number-like values
-// ("007" becomes 7).
-func marshal(vals map[string]string) string {
-	names := make([]string, 0, len(vals))
-	for n := range vals {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	esc := strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, `"`, `\"`, "$", `\$`, "`", "\\`", "!", `\!`)
-	var b strings.Builder
-	for _, n := range names {
-		b.WriteString(n + `="` + esc.Replace(vals[n]) + "\"\n")
-	}
-	return b.String()
 }
