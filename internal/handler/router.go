@@ -73,6 +73,7 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AdminAuth(serverCfg.AdminSecret))
 
+		r.Put("/admin/tenants/{tenantID}", HandleDeploy(serverCfg, store))
 		r.Get("/admin/tenants/{tenantID}/secrets", HandleSecretsList(serverCfg))
 		r.Put("/admin/tenants/{tenantID}/secrets/{name}", HandleSecretSet(serverCfg, store))
 		r.Delete("/admin/tenants/{tenantID}/secrets/{name}", HandleSecretUnset(serverCfg, store))

@@ -11,7 +11,12 @@ Security fixes go into the latest release only. Upgrade with
 - Secret values live only in `<data-dir>/env/<tenant>.json` (directory `0700`, files `0600`).
   Tenant configs and deploys keep `${NAME}` references; values are filled in when the server
   loads a tenant.
-- Remote secret management (`/admin/tenants/...`) is off unless `SUPACRAFT_ADMIN_SECRET` is set
+- `supacraft deploy` sends only `supacraft.json`. The server validates it, refuses a project
+  whose name maps to another project's tenant, and by default stops before any change while a
+  referenced secret is missing (`--allow-missing-secrets` overrides that; the reference resolves
+  to an empty string until the secret is set). Values from `.env` are never sent, but literal
+  values written into `supacraft.json` are, so write secrets as `${NAME}` references. A received project never reads an `.env` on the server.
+- Remote management (deploys and secrets, `/admin/tenants/...`) is off unless `SUPACRAFT_ADMIN_SECRET` is set
   to at least 32 characters. Requests are HMAC-signed with a timestamp and a single-use nonce,
   and the CLI refuses plain `http://` to anything but localhost. Responses list secret names,
   never values.

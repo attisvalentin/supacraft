@@ -39,7 +39,7 @@ func newCentralAPI(t *testing.T, secret string, central bool) (*httptest.Server,
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := p.ApplyTo(context.Background(), data, false)
+	res, err := p.ApplyTo(context.Background(), data, project.ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package project
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +29,27 @@ type ApplyResult struct {
 // new tables and columns) and writes the compiled tenant config the API
 // server reads. A running server picks the change up on its next cache miss.
 func (p *Project) Apply(ctx context.Context) (*ApplyResult, error) {
-	return p.ApplyTo(ctx, "", false)
+	return p.ApplyTo(ctx, "", ApplyOptions{})
+}
+
+// ApplyOptions tune ApplyTo for a central data directory.
+type ApplyOptions struct {
+	// Replace overwrites a tenant with the same id from another project.
+	Replace bool
+	// RequireSecrets refuses (before changing anything) when a "${NAME}"
+	// reference has no server-side secret; see MissingSecretsError.
+	RequireSecrets bool
+	// DryRun validates and plans the migration without changing anything.
+	DryRun bool
+}
+
+// MissingSecretsError lists the secrets a central apply still needs.
+type MissingSecretsError struct {
+	Names []string
+}
+
+func (e *MissingSecretsError) Error() string {
+	return "missing secrets: " + strings.Join(e.Names, ", ")
 }
 
 // ErrTenantTaken is returned when a shared data directory already has a
@@ -40,11 +61,14 @@ var ErrTenantTaken = errors.New("tenant id is used by another project")
 // directory is pruned of other tenants' configs. In a shared directory a
 // tenant with the same id but another project name is only replaced when
 // replace is set, so two projects can't silently overwrite each other.
-func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*ApplyResult, error) {
+func (p *Project) ApplyTo(ctx context.Context, dataDir string, opts ApplyOptions) (*ApplyResult, error) {
 	own := dataDir == ""
+	if own && p.remote {
+		return nil, errors.New("a received project can only be applied into a data directory")
+	}
 	if own {
 		dataDir = p.DataDir()
-	} else if !replace {
+	} else if !opts.Replace {
 		other, err := existingName(dataDir, p.TenantID())
 		if err != nil {
 			return nil, fmt.Errorf("check tenant %q (pass --replace to overwrite): %w", p.TenantID(), err)
@@ -75,6 +99,9 @@ func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*A
 	if err != nil {
 		return nil, err
 	}
+	if opts.RequireSecrets && len(compiled.MissingEnv) > 0 {
+		return nil, &MissingSecretsError{Names: compiled.MissingEnv}
+	}
 
 	cfg := &config.Config{DataDir: dataDir}
 	prov := sqlitedb.New(cfg)
@@ -84,6 +111,9 @@ func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*A
 		Database:   filepath.Join(cfg.DataDir, dbName+".db"),
 		MissingEnv: compiled.MissingEnv,
 		Migrations: []string{},
+	}
+	if opts.DryRun {
+		return p.planOnly(ctx, cfg, compiled, res)
 	}
 
 	if res.Created, err = prov.EnsureTenant(ctx, dbName); err != nil {
@@ -125,6 +155,35 @@ func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*A
 
 	if err := writeTenant(cfg.DataDir, dbName, compiled.Payload, own); err != nil {
 		return nil, err
+	}
+	return res, nil
+}
+
+// planOnly fills res with the migration ApplyTo would run, without
+// creating or changing the database. A new database is planned against an
+// empty in-memory one.
+func (p *Project) planOnly(ctx context.Context, cfg *config.Config, compiled *Compiled, res *ApplyResult) (*ApplyResult, error) {
+	tables, err := ddl.ParseSchema(compiled.Payload["schema"])
+	if err != nil {
+		return nil, fmt.Errorf("parse schema: %w", err)
+	}
+	var conn *sql.DB
+	if _, statErr := os.Stat(res.Database); errors.Is(statErr, os.ErrNotExist) {
+		res.Created = true
+		conn, err = sql.Open("sqlite", ":memory:")
+	} else {
+		conn, err = ddl.NewExecutor(cfg).ConnectTenant(ctx, res.TenantID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	ops, err := ddl.PlanMigration(ctx, conn, tables)
+	if err != nil {
+		return nil, fmt.Errorf("plan migration: %w", err)
+	}
+	for _, op := range ops {
+		res.Migrations = append(res.Migrations, op.Desc)
 	}
 	return res, nil
 }

@@ -41,7 +41,11 @@ Secrets: never put a secret value in supacraft.json — write "${NAME}". Never a
 the chat and never write one into a file yourself. Call check_secrets to see which names are missing and give the
 user the command or step it returns: locally they add NAME=value to .env; for a central server they run
 "supacraft secrets set NAME" (hidden input, sent straight to the server). You can explain where to get the value
-(e.g. which dashboard page has the API key).`
+(e.g. which dashboard page has the API key).
+
+Deploying: a central server is production. Deploy only when the user asks. First run "supacraft deploy --dry-run"
+and report its result (migrations, warnings, missing secrets); run "supacraft deploy" only after the user confirms.
+A deploy sends supacraft.json; secret values stay on the server.`
 
 // Options configures the MCP server.
 type Options struct {
