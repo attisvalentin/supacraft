@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,6 +54,9 @@ func TestRoundTripAndPermissions(t *testing.T) {
 		if err := s.Set(bad, "A", "v"); err == nil {
 			t.Errorf("tenant id %q accepted", bad)
 		}
+	}
+	if err := s.Set("shop", "BIN", "\xff"); !errors.Is(err, ErrNotUTF8) {
+		t.Errorf("invalid UTF-8 accepted: %v", err)
 	}
 	if err := s.Set("shop", "1BAD", "v"); err == nil {
 		t.Error("invalid name accepted")

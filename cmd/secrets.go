@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/attisvalentin/supacraft/internal/handler"
 	"github.com/attisvalentin/supacraft/internal/remote"
@@ -197,7 +198,7 @@ func readSecretValue(name string) (string, error) {
 		if len(b) == 0 {
 			return "", errors.New("empty value (use secrets unset to remove a secret)")
 		}
-		return string(b), nil
+		return checkText(string(b))
 	}
 	b, err := io.ReadAll(io.LimitReader(os.Stdin, secrets.MaxValueBytes+2))
 	if err != nil {
@@ -208,7 +209,7 @@ func readSecretValue(name string) (string, error) {
 	if v == "" {
 		return "", errors.New("empty value on stdin")
 	}
-	return v, nil
+	return checkText(v)
 }
 
 func printSecretsStatus(st *handler.SecretsStatus, t *secretsTargetInfo) {
@@ -253,4 +254,13 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// checkText refuses binary values, which JSON (transport and storage) would
+// silently alter; base64-encode binary secrets instead.
+func checkText(v string) (string, error) {
+	if !utf8.ValidString(v) {
+		return "", fmt.Errorf("%w (base64-encode binary values)", secrets.ErrNotUTF8)
+	}
+	return v, nil
 }
