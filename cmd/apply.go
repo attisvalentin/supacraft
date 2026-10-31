@@ -94,6 +94,10 @@ func applyAndReport(ctx context.Context, p *project.Project) (*project.ApplyResu
 		fmt.Printf("✓ Applied %s as tenant %q in %s\n", p.Name(), res.TenantID, applyDataDir)
 		return res, nil
 	}
+	if applyDataDir != "" {
+		fmt.Printf("✓ Applied %s as tenant %q in %s\n", p.Name(), res.TenantID, applyDataDir)
+		return res, nil
+	}
 	fmt.Printf("✓ Applied %s\n", p.Name())
 	return res, nil
 }
