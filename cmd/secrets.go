@@ -29,7 +29,7 @@ var secretsCmd = &cobra.Command{
 	Short: "Manage the secrets of a tenant on a central server",
 	Long: `Secrets are the values behind "${NAME}" references in supacraft.json. On a
 central server (serve --data-dir) they live only on the server, in
-<data-dir>/env/<tenant>.env, and never in the project or a deploy.
+<data-dir>/env/<tenant>.json, and never in the project or a deploy.
 
 Run these on your machine against the server:
 

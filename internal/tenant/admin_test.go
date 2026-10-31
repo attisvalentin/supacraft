@@ -70,13 +70,13 @@ func TestDisableEnableRemove(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(data, "env"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(data, "env", "shop.env"), []byte("K=v\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(data, "env", "shop.json"), []byte(`{"K": "v"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := RemoveTenant(ctx, data, storage, "shop", true); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"tenants/shop.json", "shop.db", "shop.db-wal", "storage/shop", "env/shop.env"} {
+	for _, p := range []string{"tenants/shop.json", "shop.db", "shop.db-wal", "storage/shop", "env/shop.json"} {
 		if _, err := os.Stat(filepath.Join(data, p)); !os.IsNotExist(err) {
 			t.Errorf("%s survived purge", p)
 		}
