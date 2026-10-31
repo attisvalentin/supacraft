@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/attisvalentin/supacraft/internal/envref"
 	"github.com/joho/godotenv"
@@ -66,6 +68,25 @@ func (s *Store) Names(tenantID string) ([]string, error) {
 	return names, nil
 }
 
+// mu serialises read-modify-write within this process; lockFile (an OS
+// file lock) does it across processes, e.g. "secrets --data-dir" next to a
+// running server.
+var mu sync.Mutex
+
+func (s *Store) locked(fn func() error) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return err
+	}
+	unlock, err := lockFile(filepath.Join(s.dir, ".lock"))
+	if err != nil {
+		return fmt.Errorf("lock secrets: %w", err)
+	}
+	defer unlock()
+	return fn()
+}
+
 // Set stores one secret.
 func (s *Store) Set(tenantID, name, value string) error {
 	if !envref.NameRe.MatchString(name) {
@@ -74,25 +95,29 @@ func (s *Store) Set(tenantID, name, value string) error {
 	if len(value) > MaxValueBytes {
 		return fmt.Errorf("secret value too large (max %d bytes)", MaxValueBytes)
 	}
-	vals, err := s.Values(tenantID)
-	if err != nil {
-		return err
-	}
-	vals[name] = value
-	return s.write(tenantID, vals)
+	return s.locked(func() error {
+		vals, err := s.Values(tenantID)
+		if err != nil {
+			return err
+		}
+		vals[name] = value
+		return s.write(tenantID, vals)
+	})
 }
 
 // Unset removes one secret; removing an unknown name is not an error.
 func (s *Store) Unset(tenantID, name string) error {
-	vals, err := s.Values(tenantID)
-	if err != nil {
-		return err
-	}
-	if _, ok := vals[name]; !ok {
-		return nil
-	}
-	delete(vals, name)
-	return s.write(tenantID, vals)
+	return s.locked(func() error {
+		vals, err := s.Values(tenantID)
+		if err != nil {
+			return err
+		}
+		if _, ok := vals[name]; !ok {
+			return nil
+		}
+		delete(vals, name)
+		return s.write(tenantID, vals)
+	})
 }
 
 // Remove deletes all of a tenant's secrets.
@@ -115,16 +140,13 @@ func (s *Store) write(tenantID string, vals map[string]string) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return err
 	}
-	content, err := godotenv.Marshal(vals)
-	if err != nil {
-		return err
-	}
+	content := marshal(vals)
 	tmp, err := os.CreateTemp(s.dir, tenantID+"-*.tmp")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(content + "\n"); err != nil {
+	if _, err := tmp.WriteString(content); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -132,4 +154,21 @@ func (s *Store) write(tenantID string, vals map[string]string) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), p)
+}
+
+// marshal writes every value double-quoted with the escapes godotenv.Read
+// understands. godotenv.Marshal is not used: it rewrites number-like values
+// ("007" becomes 7).
+func marshal(vals map[string]string) string {
+	names := make([]string, 0, len(vals))
+	for n := range vals {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	esc := strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, `"`, `\"`, "$", `\$`, "`", "\\`", "!", `\!`)
+	var b strings.Builder
+	for _, n := range names {
+		b.WriteString(n + `="` + esc.Replace(vals[n]) + "\"\n")
+	}
+	return b.String()
 }
