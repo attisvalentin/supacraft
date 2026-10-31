@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -144,9 +145,11 @@ func (pm *PoolManager) GetPool(ctx context.Context, cfg *TenantConfig) (*DB, err
 // from a central data directory, so a purged database file isn't kept open.
 func (pm *PoolManager) Retain(keep map[string]bool) {
 	pm.pools.Range(func(key, value any) bool {
-		if !keep[key.(string)] {
-			value.(*poolEntry).db.Close()
-			pm.pools.Delete(key)
+		// Delete first, so GetPool can't hand out the entry being closed.
+		if !keep[key.(string)] && pm.pools.CompareAndDelete(key, value) {
+			if err := value.(*poolEntry).db.Close(); err != nil {
+				slog.Warn("tenant pool: close failed", "db", key, "err", err)
+			}
 		}
 		return true
 	})
@@ -165,9 +168,10 @@ func (pm *PoolManager) StartEvictor(ctx context.Context) {
 				pm.pools.Range(func(key, value any) bool {
 					entry := value.(*poolEntry)
 					last := time.Unix(0, entry.lastAccessed.Load())
-					if time.Since(last) > 30*time.Minute {
-						entry.db.Close()
-						pm.pools.Delete(key)
+					if time.Since(last) > 30*time.Minute && pm.pools.CompareAndDelete(key, value) {
+						if err := entry.db.Close(); err != nil {
+							slog.Warn("tenant pool: close failed", "db", key, "err", err)
+						}
 					}
 					return true
 				})

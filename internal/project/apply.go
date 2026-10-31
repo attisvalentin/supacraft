@@ -45,7 +45,11 @@ func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*A
 	if own {
 		dataDir = p.DataDir()
 	} else if !replace {
-		if other := existingName(dataDir, p.TenantID()); other != "" && other != p.Name() {
+		other, err := existingName(dataDir, p.TenantID())
+		if err != nil {
+			return nil, fmt.Errorf("check tenant %q (pass --replace to overwrite): %w", p.TenantID(), err)
+		}
+		if other != "" && other != p.Name() {
 			return nil, fmt.Errorf("%w: %q already serves project %q (rename this project or pass --replace)", ErrTenantTaken, p.TenantID(), other)
 		}
 	}
@@ -125,19 +129,23 @@ func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*A
 	return res, nil
 }
 
-// existingName is the project name of tenant id in dataDir, or "".
-func existingName(dataDir, id string) string {
+// existingName is the project name of tenant id in dataDir, or "" if there
+// is no such tenant.
+func existingName(dataDir, id string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dataDir, "tenants", id+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var cfg struct {
 		DisplayName string `json:"display_name"`
 	}
-	if json.Unmarshal(data, &cfg) != nil {
-		return ""
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", fmt.Errorf("parse existing tenant config: %w", err)
 	}
-	return cfg.DisplayName
+	return cfg.DisplayName, nil
 }
 
 // writeTenant writes {dataDir}/tenants/{id}.json atomically. With prune it

@@ -31,6 +31,7 @@ func (s *Server) Reload(ctx context.Context) {
 	s.Store.Invalidate()
 	if ids, err := s.Store.ScanTenantIDs(ctx); err == nil {
 		keep := map[string]bool{}
+		complete := true
 		for _, id := range ids {
 			if cfg, err := s.Store.GetTenantConfig(ctx, id); err == nil {
 				// Same key as PoolManager.GetPool.
@@ -39,9 +40,14 @@ func (s *Server) Reload(ctx context.Context) {
 					name = cfg.Schema.TenantID
 				}
 				keep[name] = true
+			} else {
+				// An unreadable config may still have a live pool; keep all.
+				complete = false
 			}
 		}
-		s.Pools.Retain(keep)
+		if complete {
+			s.Pools.Retain(keep)
+		}
 	}
 	if s.Crons != nil {
 		s.Crons.Reload(ctx)

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/attisvalentin/supacraft/internal/secrets"
 )
@@ -20,8 +19,14 @@ func disabledPath(dataDir, id string) string {
 
 // SetDisabled turns a tenant off (503 for every request, no cron) or on.
 func SetDisabled(dataDir, id string, disabled bool) error {
-	if _, err := os.Stat(filepath.Join(dataDir, "tenants", id+".json")); err != nil {
+	if !ValidTenantID(id) {
 		return ErrTenantNotFound
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "tenants", id+".json")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrTenantNotFound
+		}
+		return err
 	}
 	p := disabledPath(dataDir, id)
 	if !disabled {
@@ -33,9 +38,10 @@ func SetDisabled(dataDir, id string, disabled bool) error {
 	return os.WriteFile(p, nil, 0o600)
 }
 
+// isDisabled fails closed: a marker that can't be checked counts as set.
 func isDisabled(dataDir, id string) bool {
 	_, err := os.Stat(disabledPath(dataDir, id))
-	return err == nil
+	return !errors.Is(err, os.ErrNotExist)
 }
 
 // TenantInfo summarizes one tenant in a data directory.
@@ -77,37 +83,39 @@ func ListTenants(ctx context.Context, dataDir string) ([]TenantInfo, error) {
 }
 
 // RemoveTenant stops serving a tenant by deleting its config. With purge it
-// also deletes the tenant's database and files under storagePath; without
-// it the data stays and a later apply brings the tenant back.
-func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bool) error {
+// also deletes the tenant's database and local files under storagePath;
+// without it the data stays and a later apply brings the tenant back. The
+// config goes last, so a failed purge can be retried. remoteFiles reports
+// a non-local storage driver, whose files RemoveTenant cannot delete.
+func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bool) (remoteFiles string, err error) {
 	store := &FileStore{dir: filepath.Join(dataDir, "tenants")}
 	cfg, err := store.GetTenantConfig(ctx, id)
 	if err != nil {
-		return err
+		return "", err
+	}
+	if purge {
+		for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
+			if err := os.Remove(filepath.Join(dataDir, cfg.DBName+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("delete database: %w", err)
+			}
+		}
+		if storagePath != "" {
+			if err := os.RemoveAll(filepath.Join(storagePath, id)); err != nil {
+				return "", fmt.Errorf("delete files: %w", err)
+			}
+		}
+		if err := secrets.New(dataDir).Remove(id); err != nil {
+			return "", fmt.Errorf("delete secrets: %w", err)
+		}
+		if st := cfg.APISettings.Storage; st != nil && st.Driver != "" && st.Driver != "local" {
+			remoteFiles = st.Driver
+		}
+	}
+	if err := os.Remove(disabledPath(dataDir, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("remove disabled marker: %w", err)
 	}
 	if err := os.Remove(store.tenantPath(id)); err != nil {
-		return err
+		return "", err
 	}
-	os.Remove(disabledPath(dataDir, id))
-	if !purge {
-		return nil
-	}
-	if err := secrets.New(dataDir).Remove(id); err != nil {
-		return fmt.Errorf("delete secrets: %w", err)
-	}
-	dbName := cfg.DBName
-	if dbName == "" || strings.ContainsAny(dbName, `/\.`) {
-		dbName = id
-	}
-	for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
-		if err := os.Remove(filepath.Join(dataDir, dbName+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("delete database: %w", err)
-		}
-	}
-	if storagePath != "" {
-		if err := os.RemoveAll(filepath.Join(storagePath, id)); err != nil {
-			return fmt.Errorf("delete files: %w", err)
-		}
-	}
-	return nil
+	return remoteFiles, nil
 }

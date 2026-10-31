@@ -303,7 +303,7 @@ curl -H "X-Tenant-ID: shop" https://api.example.com/fn/products
 The tenant id comes from the project name (`"name": "My Shop"` → `my_shop`). Manage tenants with
 `supacraft tenants list | disable <id> | enable <id> | remove <id> [--purge]`. A disabled tenant
 answers `503` and its cron jobs pause until you enable it again; applying it again doesn't re-enable
-it. `remove` keeps the database unless you add `--purge`. Pass `--default-tenant <id>` to
+it. `remove` keeps the database unless you add `--purge`, which deletes the database and locally stored uploads (files in S3 or another remote storage driver have to be removed there). Pass `--default-tenant <id>` to
 `serve` if requests without the header should go to one tenant.
 
 Back up the whole data directory, for example with [Litestream](https://litestream.io).
