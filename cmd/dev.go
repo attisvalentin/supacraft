@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/attisvalentin/supacraft/internal/app"
+	"github.com/attisvalentin/supacraft/internal/middleware"
 	"github.com/attisvalentin/supacraft/internal/project"
 	"github.com/attisvalentin/supacraft/internal/tenant"
 	"github.com/spf13/cobra"
@@ -119,6 +120,10 @@ func runCentral() error {
 		return err
 	}
 	cfg.DefaultTenant = serveDefaultT
+	cfg.Central = true
+	if cfg.AdminSecret != "" && len(cfg.AdminSecret) < middleware.MinAdminSecretLen {
+		return fmt.Errorf("SUPACRAFT_ADMIN_SECRET must be at least %d characters (try: openssl rand -hex 32)", middleware.MinAdminSecretLen)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -148,16 +153,17 @@ func runCentral() error {
 	return <-stopped
 }
 
-// watchTenants polls the tenants directory and calls onChange after any
-// config or disabled marker changes.
+// watchTenants polls the tenants and env directories and calls onChange
+// after any config, disabled marker or secret changes.
 func watchTenants(ctx context.Context, dataDir string, onChange func()) {
-	dir := filepath.Join(dataDir, "tenants")
 	snapshot := func() string {
-		entries, _ := os.ReadDir(dir)
 		var s strings.Builder
-		for _, e := range entries {
-			if info, err := e.Info(); err == nil && !strings.HasSuffix(e.Name(), ".tmp") {
-				fmt.Fprintf(&s, "%s|%s|%d;", e.Name(), info.ModTime(), info.Size())
+		for _, sub := range []string{"tenants", "env"} {
+			entries, _ := os.ReadDir(filepath.Join(dataDir, sub))
+			for _, e := range entries {
+				if info, err := e.Info(); err == nil && !strings.HasSuffix(e.Name(), ".tmp") {
+					fmt.Fprintf(&s, "%s/%s|%s|%d;", sub, e.Name(), info.ModTime(), info.Size())
+				}
 			}
 		}
 		return s.String()

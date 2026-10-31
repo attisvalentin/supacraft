@@ -35,8 +35,13 @@ Workflow:
 3. Test with call_endpoint (e.g. GET /fn/posts) and inspect data with query_db. get_logs shows recent API errors.
 
 Rules: identify tables, functions, cronjobs and email templates by name, never by UUID. Prefer pipeline functions
-(/fn/...) over the raw CRUD endpoints. Never put secrets in supacraft.json: write "${NAME}" and tell the user to
-set NAME in the project's .env file.`
+(/fn/...) over the raw CRUD endpoints.
+
+Secrets: never put a secret value in supacraft.json — write "${NAME}". Never ask the user to paste a secret into
+the chat and never write one into a file yourself. Call check_secrets to see which names are missing and give the
+user the command or step it returns: locally they add NAME=value to .env; for a central server they run
+"supacraft secrets set NAME" (hidden input, sent straight to the server). You can explain where to get the value
+(e.g. which dashboard page has the API key).`
 
 // Options configures the MCP server.
 type Options struct {
@@ -240,6 +245,11 @@ func (s *server) register(srv *mcp.Server) {
 				in.Limit = 20
 			}
 			return s.getLogs(ctx, in.Limit)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "check_secrets", Description: "List the \"${NAME}\" secrets the project references and which are set — on the central server when SUPACRAFT_SERVER is configured, otherwise in .env. Returns names only, never values, plus the command the user runs to set a missing one. Never ask the user for a secret value in chat."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+			return s.checkSecrets(ctx)
 		})
 }
 

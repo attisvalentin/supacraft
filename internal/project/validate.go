@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/attisvalentin/supacraft/internal/envref"
 	"github.com/attisvalentin/supacraft/internal/pipeline"
 	"github.com/attisvalentin/supacraft/internal/tenant"
 	"github.com/robfig/cron/v3"
@@ -248,7 +249,7 @@ func (v *validator) apiSettings(s map[string]any) {
 		if !envKeyRe.MatchString(key) {
 			v.errorf("api_settings.env."+key, "invalid env key")
 		}
-		if str, _ := val.(string); str != "" && !envRef.MatchString(str) && looksSecret(key) {
+		if str, _ := val.(string); str != "" && !envref.Ref.MatchString(str) && looksSecret(key) {
 			v.warnf("api_settings.env."+key, "looks like a secret stored in plain text; use \"${%s}\" and put the value in .env", key)
 		}
 	}

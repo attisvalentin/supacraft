@@ -22,7 +22,13 @@ type Config struct {
 	// MaxBodySize caps JSON request bodies (file uploads use MaxFileSize).
 	MaxBodySize  int64
 	StudioSecret string
-	DisableCron  bool
+	// AdminSecret signs remote management requests (secrets, deploys) to a
+	// central server. Admin endpoints are off when it is empty.
+	AdminSecret string
+	// Central is set by serve --data-dir: the data directory holds many
+	// projects' tenants and their server-side secrets.
+	Central     bool
+	DisableCron bool
 	// TrustProxy makes rate limits key on X-Real-IP / X-Forwarded-For.
 	TrustProxy bool
 	// DefaultTenant is used when a request has no X-Tenant-ID header, so a
@@ -51,6 +57,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg.StudioSecret = os.Getenv("STUDIO_SECRET")
+	cfg.AdminSecret = os.Getenv("SUPACRAFT_ADMIN_SECRET")
 
 	// ErrorLogDB and StoragePath default to DataDir-anchored locations so all
 	// server state lives under one root regardless of the process's CWD.

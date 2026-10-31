@@ -165,7 +165,7 @@ A column named `id` with `"primary": true` (or type `primary`) gets an auto-gene
 Does **not** affect `timestamptz` columns — those are always stored as UTC and need no special handling.
 Omit or set `"UTC"` for default UTC behaviour.
 
-**`env`**: Key→value object of variables available as `{{env.KEY}}` in pipeline steps. Keys must match `/^[a-zA-Z_][a-zA-Z0-9_]*$/`. **Never put secret values in supacraft.json** — write a reference `"${KEY}"` and have the user put `KEY=...` in the project's `.env` file (git-ignored). Any string in `api_settings` that is exactly `"${NAME}"` is replaced from `.env` / the process environment when the project is applied.
+**`env`**: Key→value object of variables available as `{{env.KEY}}` in pipeline steps. Keys must match `/^[a-zA-Z_][a-zA-Z0-9_]*$/`. **Never put secret values in supacraft.json** — write a reference `"${KEY}"` and have the user put `KEY=...` in the project's `.env` file (git-ignored). Any string in `api_settings` that is exactly `"${NAME}"` is replaced from `.env` / the process environment when the project is applied. On a central server (`serve --data-dir`) the values live only on the server instead: the user sets them with `supacraft secrets set NAME` (hidden input). Use the MCP `check_secrets` tool to see which names are missing — never ask the user to paste a secret into the chat.
 
 References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resolves the key `STRIPE_API_KEY`. A casing mismatch resolves to empty with no error.
 

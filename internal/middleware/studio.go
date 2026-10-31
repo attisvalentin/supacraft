@@ -20,11 +20,29 @@ const studioMaxBody = 1 << 20 // 1 MiB
 // both plus the method, URI and body. When secret is empty the endpoints are
 // disabled (every request is rejected).
 func StudioAuth(secret string) func(http.Handler) http.Handler {
+	return signedAuth(secret, "studio endpoints are disabled (STUDIO_SECRET not set)")
+}
+
+// MinAdminSecretLen is the shortest SUPACRAFT_ADMIN_SECRET accepted: it
+// guards writes to every tenant of a server, so it must not be guessable.
+const MinAdminSecretLen = 32
+
+// AdminAuth verifies signed requests to /admin/tenants (the same scheme as
+// the studio, keyed by SUPACRAFT_ADMIN_SECRET). A missing or short secret
+// disables the endpoints.
+func AdminAuth(secret string) func(http.Handler) http.Handler {
+	if len(secret) < MinAdminSecretLen {
+		secret = ""
+	}
+	return signedAuth(secret, "admin endpoints are disabled (set SUPACRAFT_ADMIN_SECRET to at least 32 characters)")
+}
+
+func signedAuth(secret, disabledMsg string) func(http.Handler) http.Handler {
 	nonces := studiosign.NewNonceCache()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if secret == "" {
-				writeStudioErr(w, http.StatusForbidden, "studio endpoints are disabled (STUDIO_SECRET not set)")
+				writeStudioErr(w, http.StatusForbidden, disabledMsg)
 				return
 			}
 

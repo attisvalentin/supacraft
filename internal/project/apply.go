@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/attisvalentin/supacraft/internal/config"
+	"github.com/attisvalentin/supacraft/internal/secrets"
 	"github.com/attisvalentin/supacraft/internal/sqlitedb"
 	"github.com/attisvalentin/supacraft/internal/sqlitedb/ddl"
 )
@@ -51,7 +52,22 @@ func (p *Project) ApplyTo(ctx context.Context, dataDir string, replace bool) (*A
 	if issues := p.Validate(); HasErrors(issues) {
 		return nil, &ValidationError{Issues: issues}
 	}
-	compiled, err := p.Compile()
+	var err error
+	var compiled *Compiled
+	if own {
+		compiled, err = p.Compile()
+	} else {
+		// A central server keeps "${NAME}" references and resolves them from
+		// its own secret store; the project's .env is not used.
+		var names []string
+		if names, err = secrets.New(dataDir).Names(p.TenantID()); err == nil {
+			available := map[string]bool{}
+			for _, n := range names {
+				available[n] = true
+			}
+			compiled, err = p.CompileKeepingRefs(available)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

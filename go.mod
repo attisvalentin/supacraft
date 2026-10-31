@@ -19,6 +19,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.58.0
+	golang.org/x/term v0.47.0
 	google.golang.org/api v0.307.0
 	modernc.org/sqlite v1.53.0
 )

@@ -84,7 +84,11 @@ func applyAndReport(ctx context.Context, p *project.Project) (*project.ApplyResu
 		fmt.Printf("  • %s\n", m)
 	}
 	for _, name := range res.MissingEnv {
-		fmt.Printf("  ⚠ ${%s} is not set in .env\n", name)
+		if applyDataDir != "" {
+			fmt.Printf("  ⚠ secret %s is not set on this server: supacraft secrets set %s --tenant %s --data-dir %s\n", name, name, res.TenantID, applyDataDir)
+		} else {
+			fmt.Printf("  ⚠ ${%s} is not set in .env\n", name)
+		}
 	}
 	if applyDataDir != "" {
 		fmt.Printf("✓ Applied %s as tenant %q in %s\n", p.Name(), res.TenantID, applyDataDir)

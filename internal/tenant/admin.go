@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/attisvalentin/supacraft/internal/secrets"
 )
 
 // A tenant is disabled by a marker file next to its config, not by editing
@@ -89,6 +91,9 @@ func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bo
 	os.Remove(disabledPath(dataDir, id))
 	if !purge {
 		return nil
+	}
+	if err := secrets.New(dataDir).Remove(id); err != nil {
+		return fmt.Errorf("delete secrets: %w", err)
 	}
 	dbName := cfg.DBName
 	if dbName == "" || strings.ContainsAny(dbName, `/\.`) {
