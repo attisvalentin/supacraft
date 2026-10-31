@@ -38,7 +38,7 @@ func TestRunCurrent_UsesLatestSteps(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := p.ApplyTo(ctx, data, false); err != nil {
+		if _, err := p.ApplyTo(ctx, data, project.ApplyOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}

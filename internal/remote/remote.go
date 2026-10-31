@@ -55,11 +55,23 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Error is a non-2xx response.
+// Error is a non-2xx response. MissingSecrets and Issues are filled when the
+// server reports them (deploy).
 type Error struct {
-	Status  int
-	Message string
+	Status         int
+	Message        string
+	MissingSecrets []string
+	Issues         []Issue
 }
+
+// Issue is a validation problem reported by the server.
+type Issue struct {
+	Path     string `json:"path"`
+	Message  string `json:"message"`
+	Severity string `json:"severity"`
+}
+
+func (i Issue) String() string { return fmt.Sprintf("%s %s: %s", i.Severity, i.Path, i.Message) }
 
 func (e *Error) Error() string { return e.Message }
 
@@ -93,13 +105,15 @@ func (c *Client) Do(ctx context.Context, method, path string, reqBody, out any) 
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		var e struct {
-			Error string `json:"error"`
+			Error          string   `json:"error"`
+			MissingSecrets []string `json:"missing_secrets"`
+			Issues         []Issue  `json:"issues"`
 		}
 		msg := resp.Status
 		if json.Unmarshal(data, &e) == nil && e.Error != "" {
 			msg = e.Error
 		}
-		return &Error{Status: resp.StatusCode, Message: fmt.Sprintf("server: %s", msg)}
+		return &Error{Status: resp.StatusCode, Message: fmt.Sprintf("server: %s", msg), MissingSecrets: e.MissingSecrets, Issues: e.Issues}
 	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)

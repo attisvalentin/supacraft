@@ -34,6 +34,16 @@ var ErrNotFound = errors.New("no " + FileName + " found (run: supacraft init)")
 type Project struct {
 	Dir string
 	Raw map[string]any
+	// remote marks a project received by a central server (FromRaw): it has
+	// no directory, so there is no .env to read.
+	remote bool
+}
+
+// FromRaw wraps a supacraft.json document received over the network. It has
+// no directory: Env is empty and it can only be applied with ApplyTo into a
+// data directory.
+func FromRaw(raw map[string]any) *Project {
+	return &Project{Raw: raw, remote: true}
 }
 
 // Load reads supacraft.json from dir.

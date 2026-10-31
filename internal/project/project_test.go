@@ -315,17 +315,17 @@ func TestApplyTo_SharedDirKeepsOtherTenants(t *testing.T) {
 	a := load(t, `{"name": "alpha"}`)
 	b := load(t, `{"name": "beta"}`)
 	for _, p := range []*Project{a, b} {
-		if _, err := p.ApplyTo(context.Background(), shared, false); err != nil {
+		if _, err := p.ApplyTo(context.Background(), shared, ApplyOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Another project whose name maps to the same id is refused.
 	clash := load(t, `{"name": "Alpha!"}`)
-	if _, err := clash.ApplyTo(context.Background(), shared, false); !errors.Is(err, ErrTenantTaken) {
+	if _, err := clash.ApplyTo(context.Background(), shared, ApplyOptions{}); !errors.Is(err, ErrTenantTaken) {
 		t.Fatalf("clashing project applied: %v", err)
 	}
-	if _, err := clash.ApplyTo(context.Background(), shared, true); err != nil {
+	if _, err := clash.ApplyTo(context.Background(), shared, ApplyOptions{Replace: true}); err != nil {
 		t.Fatalf("--replace: %v", err)
 	}
 
@@ -333,7 +333,7 @@ func TestApplyTo_SharedDirKeepsOtherTenants(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(shared, "tenants", "beta.json"), []byte("{broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.ApplyTo(context.Background(), shared, false); err == nil {
+	if _, err := b.ApplyTo(context.Background(), shared, ApplyOptions{}); err == nil {
 		t.Fatal("overwrote an unreadable tenant config without --replace")
 	}
 	for _, id := range []string{"alpha", "beta"} {

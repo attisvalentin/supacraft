@@ -70,7 +70,7 @@ func applyAndReport(ctx context.Context, p *project.Project) (*project.ApplyResu
 	var res *project.ApplyResult
 	var err error
 	if applyDataDir != "" {
-		res, err = p.ApplyTo(ctx, applyDataDir, applyReplace)
+		res, err = p.ApplyTo(ctx, applyDataDir, project.ApplyOptions{Replace: applyReplace})
 	} else {
 		res, err = p.Apply(ctx)
 	}

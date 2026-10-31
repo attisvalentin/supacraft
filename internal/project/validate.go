@@ -640,6 +640,9 @@ func (v *validator) decodes(p *Project) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		v.errorf("", "config does not match the server's types: %v", err)
 	}
+	if p.remote {
+		return // a central server reports missing secrets itself
+	}
 	for _, name := range compiled.MissingEnv {
 		v.warnf("api_settings", "${%s} is not set in .env or the environment", name)
 	}

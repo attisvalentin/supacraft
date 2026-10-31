@@ -28,6 +28,9 @@ var authUserColumns = []map[string]any{
 // Env returns the variables visible to the project: .env in the project dir,
 // overridden by the process environment.
 func (p *Project) Env() map[string]string {
+	if p.remote {
+		return map[string]string{}
+	}
 	env, _ := godotenv.Read(filepath.Join(p.Dir, ".env"))
 	if env == nil {
 		env = map[string]string{}

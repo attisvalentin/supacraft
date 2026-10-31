@@ -207,6 +207,7 @@ The `users` table and the auth endpoints come from `"auth_enabled": true`; you d
 | `supacraft validate` | Check `supacraft.json` and print errors and warnings |
 | `supacraft apply` | Migrate the database and write the compiled config (`--data-dir` = into a central server) |
 | `supacraft tenants` | `list`, `disable`, `enable`, `remove [--purge]` tenants of a central server |
+| `supacraft deploy` | Send `supacraft.json` to a central server: validate, migrate, go live (`--dry-run` first). Secret values are never sent |
 | `supacraft secrets` | `set`, `unset`, `list` a tenant's secrets on a central server (values never leave the server) |
 | `supacraft studio` | Open a read-only data browser |
 | `supacraft service install` | Install `serve` as a systemd service (Linux); `--data-dir` for a central server |
@@ -265,6 +266,7 @@ SUPACRAFT_ADMIN_SECRET=...        # same value as on the server
 
 supacraft secrets list            # names only: which are set, which are missing
 supacraft secrets set STRIPE_KEY  # Value for STRIPE_KEY (input hidden): ••••
+supacraft deploy                  # refuses, listing the names, while a secret is missing
 ```
 
 The AI agent never sees the values: its `check_secrets` tool reports names and gives you the
@@ -283,7 +285,11 @@ sudo supacraft service install --data-dir /var/lib/supacraft
 # to manage secrets from your machine (see Secrets), the service reads
 # /var/lib/supacraft/.env (chmod 600):  SUPACRAFT_ADMIN_SECRET=<openssl rand -hex 32>
 
-# add or update an API: validates, creates or migrates its database, goes live without a restart
+# from your machine: add or update an API — the server validates it, creates or migrates
+# its database and serves it within seconds, without a restart
+cd shop && supacraft deploy       # --dry-run shows the migration first
+
+# or on the server itself
 supacraft apply -C ./shop --data-dir /var/lib/supacraft
 
 curl -H "X-Tenant-ID: shop" https://api.example.com/fn/products
@@ -332,8 +338,8 @@ addresses. To back up the app, back up `.supacraft/`
 | `MAX_FILE_SIZE` | `104857600` | Max upload size in bytes |
 | `STUDIO_SECRET` | random | Studio password |
 | `SUPACRAFT_DATA_DIR` | — | Central data directory (same as `--data-dir`) |
-| `SUPACRAFT_ADMIN_SECRET` | off | Signs remote management (secrets) of a central server; at least 32 characters (`openssl rand -hex 32`). Admin endpoints are off without it |
-| `SUPACRAFT_SERVER` | — | On your machine: URL of the central server for `supacraft secrets` |
+| `SUPACRAFT_ADMIN_SECRET` | off | Signs remote management (deploys, secrets) of a central server; at least 32 characters (`openssl rand -hex 32`). Admin endpoints are off without it |
+| `SUPACRAFT_SERVER` | — | On your machine: URL of the central server for `supacraft deploy` and `supacraft secrets` |
 
 ## Security
 
