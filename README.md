@@ -32,6 +32,10 @@ SupaCraft goes another way:
 3. **One binary runs it.** `supacraft dev` turns the file into a live API backed by SQLite.
    You don't need Docker, a cloud account or a separate database server. It runs the same on
    your laptop and on a $5 VPS.
+4. **One server runs all your APIs.** Start `supacraft serve --data-dir` once on your server.
+   Every new backend is one `supacraft deploy` away: the server creates its database and serves
+   it within seconds, next to the others, without a restart or a new process. The
+   `X-Tenant-ID` header picks which API answers a request.
 
 It is built for **lightning-fast MVPs, prototypes, internal tools and side projects**, where you
 want a real backend in minutes rather than days and you don't want to run anyone's platform.
@@ -48,6 +52,7 @@ want a real backend in minutes rather than days and you don't want to run anyone
 | ✉️ **Email** | SMTP with templates |
 | 🤖 **AI-native** | Built-in MCP server: the agent edits, validates, migrates, calls endpoints and queries data |
 | 🔍 **Studio** | Read-only web UI to browse your data |
+| 🏢 **Many APIs, one server** | One `serve` process hosts every project; `supacraft deploy` adds or updates one live, secrets stay on the server |
 
 ## How it feels
 
@@ -105,6 +110,22 @@ and describe what you want. The agent starts `supacraft mcp`, which also serves 
 ```bash
 supacraft dev    # API on http://localhost:8080, re-applied on every save
 ```
+
+**Ship it.** On your server, start one SupaCraft for all your projects, once:
+
+```bash
+sudo supacraft service install --data-dir /var/lib/supacraft
+```
+
+Then deploy each project from your machine; no new process, no restart (both sides need the
+same `SUPACRAFT_ADMIN_SECRET`):
+
+```bash
+supacraft deploy --server https://api.example.com
+curl -H "X-Tenant-ID: my_app" https://api.example.com/fn/posts
+```
+
+See [Many APIs on one server](#many-apis-on-one-server) for secrets and tenant management.
 
 ## A complete example
 
@@ -350,9 +371,11 @@ rather than in a public issue.
 ## Is it for me?
 
 **Good fit:** MVPs, hackathons, prototypes, internal tools, side projects, mobile or SPA
-backends, and anything where "working today" beats "infinitely flexible".
+backends, and anything where "working today" beats "infinitely flexible". Also for running
+**many small backends on one cheap server**: an agency or a maker with ten side projects hosts
+them all with one process.
 
-**Not (yet) a fit:** large multi-node deployments (SQLite, one process), apps that need
+**Not (yet) a fit:** large multi-node deployments (SQLite, one process per server), apps that need
 destructive schema migrations, or complex business logic that really wants a general-purpose
 language.
 
