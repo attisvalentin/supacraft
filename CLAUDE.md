@@ -12,7 +12,8 @@ go vet ./...
 
 ## Layout
 
-- `cmd/` — Cobra commands: `init`, `dev`, `serve`, `mcp`, `validate`, `apply`, `studio`, `service`.
+- `cmd/` — Cobra commands: `init`, `dev`, `serve`, `mcp`, `validate`, `apply`, `studio`, `service`, `tenants`.
+- Two layouts share the same runtime: a project's own `.supacraft/` (one tenant), or a central data directory (`serve --data-dir`) holding many tenants, picked per request by `X-Tenant-ID`. Never prune or overwrite other tenants in a shared directory (`Project.ApplyTo`).
 - `internal/project/` — loads `supacraft.json`, validates it (`validate.go`), compiles it into the tenant config the server reads (`compile.go`: names become ids, `${ENV}` refs resolved from `.env`, auth `users` columns injected) and applies it (`apply.go`: additive SQLite DDL + `.supacraft/tenants/<id>.json`).
 - `internal/mcpserver/` — MCP tools. Every write goes through `mutate`: validate → save → apply → reload; invalid changes are not saved.
 - `internal/app/` — starts the API server in-process.

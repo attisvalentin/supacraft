@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,5 +307,53 @@ func TestValidate_PipelineCore(t *testing.T) {
 	}
 	if !routeDup {
 		t.Error("/fn/posts/{id} and /fn/posts/{slug} not reported as the same route")
+	}
+}
+
+func TestApplyTo_SharedDirKeepsOtherTenants(t *testing.T) {
+	shared := t.TempDir()
+	a := load(t, `{"name": "alpha"}`)
+	b := load(t, `{"name": "beta"}`)
+	for _, p := range []*Project{a, b} {
+		if _, err := p.ApplyTo(context.Background(), shared, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Another project whose name maps to the same id is refused.
+	clash := load(t, `{"name": "Alpha!"}`)
+	if _, err := clash.ApplyTo(context.Background(), shared, false); !errors.Is(err, ErrTenantTaken) {
+		t.Fatalf("clashing project applied: %v", err)
+	}
+	if _, err := clash.ApplyTo(context.Background(), shared, true); err != nil {
+		t.Fatalf("--replace: %v", err)
+	}
+
+	// An unreadable existing config is not treated as "no tenant".
+	if err := os.WriteFile(filepath.Join(shared, "tenants", "beta.json"), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ApplyTo(context.Background(), shared, false); err == nil {
+		t.Fatal("overwrote an unreadable tenant config without --replace")
+	}
+	for _, id := range []string{"alpha", "beta"} {
+		if _, err := os.Stat(filepath.Join(shared, "tenants", id+".json")); err != nil {
+			t.Errorf("tenant %s missing from shared dir: %v", id, err)
+		}
+	}
+
+	// The project's own directory still holds only its current tenant.
+	own := a.DataDir()
+	if err := os.MkdirAll(filepath.Join(own, "tenants"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(own, "tenants", "old_name.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(own, "tenants", "old_name.json")); !os.IsNotExist(err) {
+		t.Error("stale tenant not pruned from the project's own directory")
 	}
 }

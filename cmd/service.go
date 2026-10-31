@@ -45,7 +45,10 @@ var serviceStatusCmd = &cobra.Command{
 	},
 }
 
+var serviceDataDir string
+
 func init() {
+	serviceInstallCmd.Flags().StringVar(&serviceDataDir, "data-dir", "", "run the service for every tenant in this central data directory")
 	serviceCmd.AddCommand(serviceInstallCmd)
 	serviceCmd.AddCommand(serviceUninstallCmd)
 	serviceCmd.AddCommand(serviceStatusCmd)
@@ -71,13 +74,23 @@ func runServiceInstall() error {
 		return fmt.Errorf("failed to detect current user: %w", err)
 	}
 
-	p, err := loadProject()
+	workDir, flag := "", ""
+	if serviceDataDir != "" {
+		if workDir, err = filepath.Abs(serviceDataDir); err != nil {
+			return err
+		}
+		flag = "--data-dir"
+	} else {
+		p, err := loadProject()
+		if err != nil {
+			return err
+		}
+		workDir, flag = p.Dir, "--dir"
+	}
+	unit, err := generateUnit(binPath, u.Username, u.HomeDir, workDir, flag)
 	if err != nil {
 		return err
 	}
-	workDir := p.Dir
-
-	unit := generateUnit(binPath, u.Username, u.HomeDir, workDir)
 
 	// Write unit file — direct if root, otherwise via sudo tee
 	if os.Getuid() == 0 {
@@ -182,7 +195,15 @@ func sudoCmd(name string, args ...string) *exec.Cmd {
 	return exec.Command("sudo", append([]string{name}, args...)...)
 }
 
-func generateUnit(binPath, username, homeDir, workDir string) string {
+// generateUnit writes the systemd unit for "serve <flag> <workDir>". Paths
+// are quoted for systemd: % and $ are escaped (systemd expands both), and
+// values that can't be expressed in a unit line are refused.
+func generateUnit(binPath, username, homeDir, workDir, flag string) (string, error) {
+	for _, v := range []string{binPath, username, homeDir, workDir} {
+		if v == "" || strings.ContainsAny(v, "\r\n\x00") || strings.HasSuffix(v, `\`) {
+			return "", fmt.Errorf("%q cannot be used in a systemd unit", v)
+		}
+	}
 	return fmt.Sprintf(`[Unit]
 Description=SupaCraft API Server
 After=network.target
@@ -191,12 +212,20 @@ After=network.target
 Type=simple
 User=%s
 WorkingDirectory=%s
-ExecStart=%s serve --dir %s
+ExecStart=%s serve %s %s
 Restart=on-failure
 RestartSec=5
-Environment=HOME=%s
+Environment=%s
 
 [Install]
 WantedBy=multi-user.target
-`, username, workDir, binPath, workDir, homeDir)
+`, unitValue(username), unitValue(workDir), unitArg(binPath), flag, unitArg(workDir), unitArg("HOME="+homeDir)), nil
+}
+
+// unitValue escapes specifiers in a plain unit setting.
+func unitValue(s string) string { return strings.ReplaceAll(s, "%", "%%") }
+
+// unitArg quotes one ExecStart/Environment word.
+func unitArg(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(s) + `"`
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/attisvalentin/supacraft/internal/config"
@@ -20,6 +21,12 @@ type Store interface {
 	GetTenantConfig(ctx context.Context, tenantID string) (*TenantConfig, error)
 	ScanTenantIDs(ctx context.Context) ([]string, error)
 }
+
+var tenantIDRe = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// ValidTenantID reports whether id is a tenant id the CLI can produce
+// (project.Slug); only such ids reach the filesystem.
+func ValidTenantID(id string) bool { return tenantIDRe.MatchString(id) }
 
 // FileStore reads tenant configs from {DataDir}/tenants/{tenantID}.json.
 type FileStore struct {
@@ -40,7 +47,7 @@ func (s *FileStore) tenantPath(tenantID string) string {
 
 // GetTenantConfig reads {DataDir}/tenants/{tenantID}.json from disk.
 func (s *FileStore) GetTenantConfig(ctx context.Context, tenantID string) (*TenantConfig, error) {
-	if tenantID == "" || strings.ContainsAny(tenantID, `/\.`) {
+	if !ValidTenantID(tenantID) {
 		return nil, ErrTenantNotFound
 	}
 	data, err := os.ReadFile(s.tenantPath(tenantID))
@@ -60,6 +67,19 @@ func (s *FileStore) GetTenantConfig(ctx context.Context, tenantID string) (*Tena
 	// keys on db_name regardless (see PoolManager.GetPool).
 	if cfg.Schema.TenantID == "" {
 		cfg.Schema.TenantID = tenantID
+	}
+	// The database file is named after the tenant. Requiring that keeps two
+	// tenants from sharing one database (and a purge from deleting another
+	// tenant's data) and keeps path-like names out of the filesystem.
+	switch cfg.DBName {
+	case "":
+		cfg.DBName = tenantID
+	case tenantID:
+	default:
+		return nil, fmt.Errorf("tenant %s: db_name %q must equal the tenant id", tenantID, cfg.DBName)
+	}
+	if isDisabled(filepath.Dir(s.dir), tenantID) {
+		cfg.Enabled = false
 	}
 	return &cfg, nil
 }

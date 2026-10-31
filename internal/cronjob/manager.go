@@ -116,16 +116,16 @@ func (cm *CronManager) reload(ctx context.Context) {
 				delete(cm.registry, key)
 			}
 
-			// Capture loop variables for the closure
+			// Capture loop variables for the closure. The job reads the
+			// current config when it fires: a reload only reschedules on a
+			// schedule change, so edited steps would otherwise never run.
 			tenantIDCopy := tenantID
 			jobIDCopy := jobID
-			jobCopy := job
-			cfgCopy := cfg
 
 			cronJob := cron.NewChain(
 				cron.SkipIfStillRunning(cron.DiscardLogger),
 			).Then(cron.FuncJob(func() {
-				cm.runJob(tenantIDCopy, jobIDCopy, &jobCopy, cfgCopy)
+				cm.runCurrent(tenantIDCopy, jobIDCopy)
 			}))
 
 			entryID, err := cm.cron.AddJob(sched, cronJob)
@@ -147,6 +147,20 @@ func (cm *CronManager) reload(ctx context.Context) {
 			slog.Info("cronjob: removed job", "key", key)
 		}
 	}
+}
+
+// runCurrent runs the job as defined in the tenant's current config.
+func (cm *CronManager) runCurrent(tenantID, jobID string) {
+	cfg, err := cm.store.GetTenantConfig(context.Background(), tenantID)
+	if err != nil {
+		slog.Error("cronjob: failed to load tenant config", "tenantID", tenantID, "jobID", jobID, "err", err)
+		return
+	}
+	job, ok := cfg.Cronjobs[jobID]
+	if !ok || !job.Enabled || !cfg.Enabled {
+		return // removed or disabled since the last reload
+	}
+	cm.runJob(tenantID, jobID, &job, cfg)
 }
 
 // runJob executes a single cronjob using the pipeline engine.
