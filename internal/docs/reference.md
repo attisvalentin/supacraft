@@ -188,7 +188,7 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 `max_file_size` is in **bytes** (the server also clamps to its own `MAX_FILE_SIZE`); omit for the server default. `allowed_mimes` is a string array whitelist (e.g. `["image/jpeg","image/png","application/pdf"]`); omit to allow any type.
 
-**Storage secrets — same rule as `env`.** Write the secret fields (`s3.secret`, `ftp.password`, `sftp.password`, `gcs.key_file`, `azure.key`) as `"${NAME}"` references and put the values in `.env`.
+**Storage secrets — same rule as `env`.** Write the secret fields (`s3.secret`, `ftp.password`, `sftp.password`, `gcs.key_file`, `azure.key`) as `"${NAME}"` references and put the values in `.env` (on a central server: `supacraft secrets set NAME`, see `env` above).
 
 **`rate_limit`**: Request rate limit per client. `enabled: true` + `requests_per_minute: N` lets each client IP make N requests/minute to the tenant across all endpoints (sliding window), so one noisy client cannot lock out everyone else. Over-limit requests return `429 Too Many Requests`. Omit the block or set `enabled: false` for no limit. Behind a reverse proxy, start the server with `TRUST_PROXY=1` so the limit uses the client address from `X-Real-IP` / `X-Forwarded-For` instead of the proxy's. `/auth/*` is always limited to 20 requests/minute per client IP, whatever this block says.
 

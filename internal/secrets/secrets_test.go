@@ -15,6 +15,9 @@ func TestRoundTripAndPermissions(t *testing.T) {
 		"C": "$HOME ${PATH} `x` !y #z",
 		"D": "",
 		"E": " spaced ",
+		"F": "007",
+		"G": "+5",
+		"H": `back\slash \n literal`,
 	}
 	for k, v := range tricky {
 		if err := s.Set("shop", k, v); err != nil {
@@ -41,7 +44,7 @@ func TestRoundTripAndPermissions(t *testing.T) {
 	if err := s.Unset("shop", "A"); err != nil {
 		t.Fatal(err)
 	}
-	if names, _ := s.Names("shop"); len(names) != 4 || names[0] != "B" {
+	if names, _ := s.Names("shop"); len(names) != 7 || names[0] != "B" {
 		t.Fatalf("names after unset: %v", names)
 	}
 	for _, bad := range []string{"../x", "Shop", ""} {
@@ -51,5 +54,21 @@ func TestRoundTripAndPermissions(t *testing.T) {
 	}
 	if err := s.Set("shop", "1BAD", "v"); err == nil {
 		t.Error("invalid name accepted")
+	}
+}
+
+func TestConcurrentSetsKeepEveryValue(t *testing.T) {
+	s := New(t.TempDir())
+	done := make(chan error)
+	for i := 0; i < 20; i++ {
+		go func(i int) { done <- s.Set("shop", "K"+string(rune('A'+i)), "v") }(i)
+	}
+	for i := 0; i < 20; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if names, _ := s.Names("shop"); len(names) != 20 {
+		t.Fatalf("lost updates: %d of 20 names kept", len(names))
 	}
 }

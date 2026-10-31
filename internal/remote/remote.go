@@ -47,7 +47,12 @@ func New(server, secret string) (*Client, error) {
 	default:
 		return nil, fmt.Errorf("server URL must start with https://")
 	}
-	return &Client{baseURL: u.String(), secret: secret, http: &http.Client{Timeout: 60 * time.Second}}, nil
+	return &Client{baseURL: u.String(), secret: secret, http: &http.Client{
+		Timeout: 60 * time.Second,
+		// A redirect would resend the signed request, secret value included,
+		// to another host or over plain http.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}, nil
 }
 
 func isLoopback(host string) bool {

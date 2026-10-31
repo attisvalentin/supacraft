@@ -106,8 +106,17 @@ func HandleSecretSet(cfg *config.Config, store *tenant.CachedStore) http.Handler
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": `body must be {"value": "..."}`})
 			return
 		}
-		if err := secrets.New(cfg.DataDir).Set(id, chi.URLParam(r, "name"), *body.Value); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		name := chi.URLParam(r, "name")
+		if !envref.NameRe.MatchString(name) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid secret name (letters, digits and _, not starting with a digit)"})
+			return
+		}
+		if len(*body.Value) > secrets.MaxValueBytes {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret value too large"})
+			return
+		}
+		if err := secrets.New(cfg.DataDir).Set(id, name, *body.Value); err != nil {
+			writeErrorJSON(w, r, http.StatusInternalServerError, "set secret: "+err.Error())
 			return
 		}
 		store.Invalidate()
