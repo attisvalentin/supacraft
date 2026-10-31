@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"unicode/utf8"
 
 	"github.com/attisvalentin/supacraft/internal/config"
 	"github.com/attisvalentin/supacraft/internal/envref"
@@ -109,6 +110,10 @@ func HandleSecretSet(cfg *config.Config, store *tenant.CachedStore) http.Handler
 		name := chi.URLParam(r, "name")
 		if !envref.NameRe.MatchString(name) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid secret name (letters, digits and _, not starting with a digit)"})
+			return
+		}
+		if !utf8.ValidString(*body.Value) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": secrets.ErrNotUTF8.Error()})
 			return
 		}
 		if len(*body.Value) > secrets.MaxValueBytes {

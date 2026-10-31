@@ -14,12 +14,16 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/attisvalentin/supacraft/internal/envref"
 )
 
 // tenantRe matches tenant ids (the same rule as the tenant middleware).
 var tenantRe = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// ErrNotUTF8 rejects values JSON can't store byte for byte.
+var ErrNotUTF8 = errors.New("secret value is not valid UTF-8 text")
 
 // MaxValueBytes bounds one secret value.
 const MaxValueBytes = 64 << 10
@@ -100,6 +104,9 @@ func (s *Store) Set(tenantID, name, value string) error {
 	}
 	if len(value) > MaxValueBytes {
 		return fmt.Errorf("secret value too large (max %d bytes)", MaxValueBytes)
+	}
+	if !utf8.ValidString(value) {
+		return ErrNotUTF8
 	}
 	return s.locked(func() error {
 		vals, err := s.Values(tenantID)
