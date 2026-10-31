@@ -328,6 +328,14 @@ func TestApplyTo_SharedDirKeepsOtherTenants(t *testing.T) {
 	if _, err := clash.ApplyTo(context.Background(), shared, true); err != nil {
 		t.Fatalf("--replace: %v", err)
 	}
+
+	// An unreadable existing config is not treated as "no tenant".
+	if err := os.WriteFile(filepath.Join(shared, "tenants", "beta.json"), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ApplyTo(context.Background(), shared, false); err == nil {
+		t.Fatal("overwrote an unreadable tenant config without --replace")
+	}
 	for _, id := range []string{"alpha", "beta"} {
 		if _, err := os.Stat(filepath.Join(shared, "tenants", id+".json")); err != nil {
 			t.Errorf("tenant %s missing from shared dir: %v", id, err)

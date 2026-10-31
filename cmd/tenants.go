@@ -99,11 +99,15 @@ be undone; you are asked to type the tenant id unless --yes is given.`,
 		if err != nil {
 			return err
 		}
-		if err := tenant.RemoveTenant(cmd.Context(), dir, cfg.StoragePath, id, tenantsPurge); err != nil {
+		remoteFiles, err := tenant.RemoveTenant(cmd.Context(), dir, cfg.StoragePath, id, tenantsPurge)
+		if err != nil {
 			return tenantErr(id, err)
 		}
 		if tenantsPurge {
 			fmt.Printf("✓ Removed %s and deleted its data\n", id)
+			if remoteFiles != "" {
+				fmt.Printf("  ⚠ its uploaded files are in %s storage and were not deleted; remove them there\n", remoteFiles)
+			}
 		} else {
 			fmt.Printf("✓ Removed %s (database kept in %s)\n", id, dir)
 		}

@@ -52,19 +52,22 @@ func TestDisableEnableRemove(t *testing.T) {
 	if cfg, _ := store.GetTenantConfig(ctx, "shop"); !cfg.Enabled {
 		t.Fatal("re-enabled tenant still disabled")
 	}
+	if err := SetDisabled(data, "../tenants/shop", true); !errors.Is(err, ErrTenantNotFound) {
+		t.Fatalf("path traversal in disable: %v", err)
+	}
 	if err := SetDisabled(data, "nope", true); !errors.Is(err, ErrTenantNotFound) {
 		t.Fatalf("disable unknown tenant: %v", err)
 	}
 
 	// Without purge the database stays.
-	if err := RemoveTenant(ctx, data, storage, "blog", false); err != nil {
+	if _, err := RemoveTenant(ctx, data, storage, "blog", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(data, "blog.db")); err != nil {
 		t.Fatal("remove without purge deleted the database")
 	}
 
-	if err := RemoveTenant(ctx, data, storage, "shop", true); err != nil {
+	if _, err := RemoveTenant(ctx, data, storage, "shop", true); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"tenants/shop.json", "shop.db", "shop.db-wal", "storage/shop"} {
@@ -72,7 +75,26 @@ func TestDisableEnableRemove(t *testing.T) {
 			t.Errorf("%s survived purge", p)
 		}
 	}
-	if err := RemoveTenant(ctx, data, storage, "../blog", true); !errors.Is(err, ErrTenantNotFound) {
+	if _, err := RemoveTenant(ctx, data, storage, "../blog", true); !errors.Is(err, ErrTenantNotFound) {
 		t.Fatalf("path traversal not rejected: %v", err)
+	}
+}
+
+func TestFileStore_DBNameMustMatchTenant(t *testing.T) {
+	data := t.TempDir()
+	writeTenantFile(t, data, "shop")
+	// Point blog at shop's database.
+	if err := os.WriteFile(filepath.Join(data, "tenants", "blog.json"), []byte(`{"db_name": "shop", "enabled": true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &FileStore{dir: filepath.Join(data, "tenants")}
+	if _, err := store.GetTenantConfig(context.Background(), "blog"); err == nil {
+		t.Fatal("tenant sharing another tenant's database was accepted")
+	}
+	if _, err := RemoveTenant(context.Background(), data, "", "blog", true); err == nil {
+		t.Fatal("purge of a tenant pointing at another database succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(data, "shop.db")); err != nil {
+		t.Fatal("shop's database was deleted")
 	}
 }
