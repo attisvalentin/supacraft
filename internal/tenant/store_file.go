@@ -1,6 +1,7 @@
 package tenant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/attisvalentin/supacraft/internal/config"
+	"github.com/attisvalentin/supacraft/internal/envref"
+	"github.com/attisvalentin/supacraft/internal/secrets"
 )
 
 var ErrTenantNotFound = errors.New("tenant not found")
@@ -58,6 +61,12 @@ func (s *FileStore) GetTenantConfig(ctx context.Context, tenantID string) (*Tena
 		return nil, fmt.Errorf("read tenant file: %w", err)
 	}
 
+	if bytes.Contains(data, []byte("${")) {
+		if data, err = s.resolveSecrets(tenantID, data); err != nil {
+			return nil, err
+		}
+	}
+
 	var cfg TenantConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse tenant config: %w", err)
@@ -82,6 +91,27 @@ func (s *FileStore) GetTenantConfig(ctx context.Context, tenantID string) (*Tena
 		cfg.Enabled = false
 	}
 	return &cfg, nil
+}
+
+// resolveSecrets replaces "${NAME}" references in api_settings with the
+// tenant's server-side secrets (configs applied to a central data directory
+// keep references instead of values). Unknown names become "".
+func (s *FileStore) resolveSecrets(tenantID string, data []byte) ([]byte, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse tenant config: %w", err)
+	}
+	vals, err := secrets.New(filepath.Dir(s.dir)).Values(tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("read secrets: %w", err)
+	}
+	if settings, ok := raw["api_settings"]; ok {
+		envref.Resolve(settings, func(name string) (string, bool) {
+			v, ok := vals[name]
+			return v, ok
+		}, nil)
+	}
+	return json.Marshal(raw)
 }
 
 // ScanTenantIDs lists all tenants by scanning the tenants directory.

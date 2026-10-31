@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"time"
 
+	"github.com/attisvalentin/supacraft/internal/envref"
 	"github.com/joho/godotenv"
 )
 
@@ -24,9 +24,6 @@ var authUserColumns = []map[string]any{
 	{"name": "created_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 	{"name": "updated_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 }
-
-// envRef matches a string that is entirely an env reference: "${NAME}".
-var envRef = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
 // Env returns the variables visible to the project: .env in the project dir,
 // overridden by the process environment.
@@ -55,6 +52,32 @@ type Compiled struct {
 // their names, and api_settings.tables / function_id keep using names.
 // "${NAME}" strings anywhere in api_settings are replaced from Env().
 func (p *Project) Compile() (*Compiled, error) {
+	env := p.Env()
+	return p.compile(func(name string) (string, bool) {
+		v, ok := env[name]
+		return v, ok
+	})
+}
+
+// CompileKeepingRefs compiles for a central server: "${NAME}" references stay
+// in the payload and the server resolves them from its own secret store when
+// it loads the config, so values never pass through the project or the
+// compiled file. MissingEnv lists references that have no name in available.
+func (p *Project) CompileKeepingRefs(available map[string]bool) (*Compiled, error) {
+	out, err := p.compile(nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range envref.Names(out.Payload["api_settings"]) {
+		if !available[name] {
+			out.MissingEnv = append(out.MissingEnv, name)
+		}
+	}
+	return out, nil
+}
+
+// compile builds the payload; lookup resolves references (nil keeps them).
+func (p *Project) compile(lookup func(string) (string, bool)) (*Compiled, error) {
 	raw, err := deepCopy(p.Raw)
 	if err != nil {
 		return nil, err
@@ -89,9 +112,11 @@ func (p *Project) Compile() (*Compiled, error) {
 		setDefault(jm, "enabled", true)
 	}
 
-	env := p.Env()
 	missing := map[string]struct{}{}
-	apiSettings := resolveEnv(asMap(raw["api_settings"]), env, missing).(map[string]any)
+	apiSettings := asMap(raw["api_settings"])
+	if lookup != nil {
+		envref.Resolve(apiSettings, lookup, missing)
+	}
 
 	out := &Compiled{
 		Payload: map[string]any{
@@ -141,33 +166,6 @@ func ensureAuthUsers(tables []any) []any {
 		cols = append(cols, copyMap(c))
 	}
 	return append([]any{map[string]any{"name": "users", "exposed": true, "columns": cols}}, tables...)
-}
-
-func resolveEnv(v any, env map[string]string, missing map[string]struct{}) any {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, child := range t {
-			t[k] = resolveEnv(child, env, missing)
-		}
-		return t
-	case []any:
-		for i, child := range t {
-			t[i] = resolveEnv(child, env, missing)
-		}
-		return t
-	case string:
-		m := envRef.FindStringSubmatch(t)
-		if m == nil {
-			return t
-		}
-		if val, ok := env[m[1]]; ok {
-			return val
-		}
-		missing[m[1]] = struct{}{}
-		return ""
-	default:
-		return v
-	}
 }
 
 func deepCopy(m map[string]any) (map[string]any, error) {

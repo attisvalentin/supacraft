@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/attisvalentin/supacraft/internal/secrets"
 )
 
 // A tenant is disabled by a marker file next to its config, not by editing
@@ -101,6 +103,9 @@ func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bo
 			if err := os.RemoveAll(filepath.Join(storagePath, id)); err != nil {
 				return "", fmt.Errorf("delete files: %w", err)
 			}
+		}
+		if err := secrets.New(dataDir).Remove(id); err != nil {
+			return "", fmt.Errorf("delete secrets: %w", err)
 		}
 		if st := cfg.APISettings.Storage; st != nil && st.Driver != "" && st.Driver != "local" {
 			remoteFiles = st.Driver
