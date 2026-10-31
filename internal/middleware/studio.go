@@ -64,9 +64,15 @@ func signedAuth(secret, disabledMsg string) func(http.Handler) http.Handler {
 				return
 			}
 
-			body, err := io.ReadAll(io.LimitReader(r.Body, studioMaxBody))
+			body, err := io.ReadAll(io.LimitReader(r.Body, studioMaxBody+1))
 			if err != nil {
 				writeStudioErr(w, http.StatusBadRequest, "cannot read body")
+				return
+			}
+			// Refuse instead of truncating: a signature over a prefix must
+			// never let a cut-off body reach the handler.
+			if len(body) > studioMaxBody {
+				writeStudioErr(w, http.StatusRequestEntityTooLarge, "request body too large")
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))

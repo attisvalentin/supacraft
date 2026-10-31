@@ -207,7 +207,7 @@ The `users` table and the auth endpoints come from `"auth_enabled": true`; you d
 | `supacraft validate` | Check `supacraft.json` and print errors and warnings |
 | `supacraft apply` | Migrate the database and write the compiled config (`--data-dir` = into a central server) |
 | `supacraft tenants` | `list`, `disable`, `enable`, `remove [--purge]` tenants of a central server |
-| `supacraft deploy` | Send `supacraft.json` to a central server: validate, migrate, go live (`--dry-run` first). Secret values are never sent |
+| `supacraft deploy` | Send `supacraft.json` to a central server: validate, migrate, go live (`--dry-run` first). Values from `.env` are never sent; write secrets as `${NAME}` references, since literal values in `supacraft.json` are sent |
 | `supacraft secrets` | `set`, `unset`, `list` a tenant's secrets on a central server (values never leave the server) |
 | `supacraft studio` | Open a read-only data browser |
 | `supacraft service install` | Install `serve` as a systemd service (Linux); `--data-dir` for a central server |

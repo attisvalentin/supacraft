@@ -43,8 +43,9 @@ user the command or step it returns: locally they add NAME=value to .env; for a 
 "supacraft secrets set NAME" (hidden input, sent straight to the server). You can explain where to get the value
 (e.g. which dashboard page has the API key).
 
-Deploying: a central server is production. Run "supacraft deploy" (it sends supacraft.json; secrets stay on the
-server) only when the user asks for it, and show them "supacraft deploy --dry-run" first.`
+Deploying: a central server is production. Deploy only when the user asks. First run "supacraft deploy --dry-run"
+and report its result (migrations, warnings, missing secrets); run "supacraft deploy" only after the user confirms.
+A deploy sends supacraft.json; secret values stay on the server.`
 
 // Options configures the MCP server.
 type Options struct {
