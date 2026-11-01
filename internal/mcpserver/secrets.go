@@ -25,16 +25,10 @@ func (s *server) checkSecrets(ctx context.Context) (*mcp.CallToolResult, any, er
 		return nil, nil, err
 	}
 	env := p.Env()
-	lookup := func(k string) string {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-		return env[k]
-	}
 	referenced := envref.Names(p.Raw["api_settings"])
 
-	if server := lookup("SUPACRAFT_SERVER"); server != "" {
-		c, err := remote.New(server, lookup("SUPACRAFT_ADMIN_SECRET"))
+	if server := lookupEnv(p, "SUPACRAFT_SERVER"); server != "" {
+		c, err := remote.New(server, lookupEnv(p, "SUPACRAFT_ADMIN_SECRET"))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -87,4 +81,12 @@ func nonNilStrings(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// lookupEnv reads k from the environment, then from the project's .env.
+func lookupEnv(p *project.Project, k string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return p.Env()[k]
 }

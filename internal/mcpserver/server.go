@@ -45,7 +45,9 @@ user the command or step it returns: locally they add NAME=value to .env; for a 
 
 Deploying: a central server is production. Deploy only when the user asks. First run "supacraft deploy --dry-run"
 and report its result (migrations, warnings, missing secrets); run "supacraft deploy" only after the user confirms.
-A deploy sends supacraft.json; secret values stay on the server.`
+A deploy sends supacraft.json; secret values stay on the server. After a deploy, get_server_errors shows what fails
+in production and list_tenants shows every API on the server. Disabling or removing a tenant is the user's call:
+give them "supacraft tenants disable|enable|remove <id>" instead of running it.`
 
 // Options configures the MCP server.
 type Options struct {
@@ -241,7 +243,7 @@ func (s *server) register(srv *mcp.Server) {
 			return s.queryDB(ctx, in.SQL)
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_logs", Description: "Recent API errors (status >= 400) with method, path and message."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_logs", Description: "Recent unexpected errors (5xx) of the local API with method, path and the internal message. Deliberate fail responses and 4xx validation errors are not logged."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Limit int `json:"limit,omitempty"`
 		}) (*mcp.CallToolResult, any, error) {
@@ -249,6 +251,21 @@ func (s *server) register(srv *mcp.Server) {
 				in.Limit = 20
 			}
 			return s.getLogs(ctx, in.Limit)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_server_errors", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Recent unexpected errors (5xx) of this project's tenant on the central server (SUPACRAFT_SERVER), newest first, with the internal message; secret values are masked. Use it after a deploy to see what failed in production; get_logs covers the local API."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Limit int `json:"limit,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			if in.Limit <= 0 {
+				in.Limit = 20
+			}
+			return s.serverErrors(ctx, in.Limit)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "list_tenants", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List every tenant (API) on the central server (SUPACRAFT_SERVER): id, name, enabled/disabled, table/function/cron counts, database size, last update. Read-only."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+			return s.listTenants(ctx)
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "check_secrets", Description: "List the \"${NAME}\" secrets the project references and which are set — on the central server when SUPACRAFT_SERVER is configured, otherwise in .env. Returns names only, never values, plus the command the user runs to set a missing one. Never ask the user for a secret value in chat."},

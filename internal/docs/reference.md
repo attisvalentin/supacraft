@@ -52,6 +52,8 @@ Defines database tables, columns, and relationships.
 }
 ```
 
+Table names starting with `_supacraft_` are reserved: SupaCraft keeps its own tables there (for example `_supacraft_files`, which records uploads so a purged tenant's files can be deleted from remote storage).
+
 ### Valid Column Types
 
 | Type | Stored as (SQLite) | Notes |

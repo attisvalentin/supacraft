@@ -169,6 +169,12 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 			v.errorf(path+".name", "%q is not a valid table name (letters, digits, _; max 63)", name)
 			continue
 		}
+		// SQLite names are case-insensitive; SupaCraft keeps its own tables
+		// (storage.FilesTable) under this prefix.
+		if strings.HasPrefix(strings.ToLower(name), "_supacraft_") {
+			v.errorf(path+".name", "table names starting with _supacraft_ are reserved")
+			continue
+		}
 		if _, dup := v.tables[name]; dup && !(authEnabled && name == "users") {
 			v.errorf(path+".name", "duplicate table %q", name)
 		}

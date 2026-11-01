@@ -160,6 +160,12 @@ func TestRemote_RefusesPlainHTTP(t *testing.T) {
 	if _, err := remote.New("http://api.example.com", adminSecret); err == nil {
 		t.Fatal("plain http to a remote host accepted")
 	}
+	if _, err := remote.New("https://user:pass@api.example.com", adminSecret); err == nil {
+		t.Fatal("credentials in the server URL accepted")
+	}
+	if _, err := remote.New("https://user:secret%ZZ@api.example.com", adminSecret); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("malformed URL error echoes it: %v", err)
+	}
 	for _, ok := range []string{"https://api.example.com", "http://localhost:8080", "http://127.0.0.1:8080"} {
 		if _, err := remote.New(ok, adminSecret); err != nil {
 			t.Errorf("%s refused: %v", ok, err)

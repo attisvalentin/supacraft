@@ -2,14 +2,18 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/attisvalentin/supacraft/internal/config"
 	"github.com/attisvalentin/supacraft/internal/middleware"
@@ -111,9 +115,31 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		tenantID := r.Header.Get("X-Tenant-ID")
 		localBase := filepath.Join(serverCfg.StoragePath, tenantID)
 
-		driver, err := storage.NewDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
+		driver, err := newStorageDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("storage driver init failed: %v", err))
+			return
+		}
+
+		// A purge waits for uploads in flight (see uploadGate); one that
+		// starts after the purge began finds the tenant gone.
+		gate := uploadGate(tenantID)
+		gate.RLock()
+		defer gate.RUnlock()
+		if !tenant.Serving(serverCfg.DataDir, tenantID) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tenant is not available"})
+			return
+		}
+
+		// Record the upload first, so purging the tenant can find the file.
+		dbPool, err := pool.GetPool(r.Context(), cfg)
+		if err != nil {
+			writeErrorJSON(w, r, http.StatusInternalServerError, "database unavailable")
+			return
+		}
+		dest := storage.Destination(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config)
+		if err := storage.TrackUpload(r.Context(), dbPool, storagePath, dest); err != nil {
+			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("record upload: %v", err))
 			return
 		}
 
@@ -121,7 +147,17 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		combinedReader := io.MultiReader(bytes.NewReader(buf), file)
 
 		if err := driver.Put(r.Context(), storagePath, combinedReader, header.Size); err != nil {
+			forgetFailedUpload(r.Context(), driver, dbPool, storagePath, dest)
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("file upload failed: %v", err))
+			return
+		}
+		// A purge from another process (tenants remove --purge --data-dir)
+		// doesn't see uploadGate. It disables the tenant before reading the
+		// records, so an upload that finishes after that read finds the
+		// tenant gone here and removes its own file.
+		if !tenant.Serving(serverCfg.DataDir, tenantID) {
+			deleteOrphan(r.Context(), driver, tenantID, storagePath)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tenant is not available"})
 			return
 		}
 
@@ -165,7 +201,7 @@ func HandleFileDownload(pool *tenant.PoolManager, serverCfg *config.Config) http
 		tenantID := r.Header.Get("X-Tenant-ID")
 		localBase := filepath.Join(serverCfg.StoragePath, tenantID)
 
-		driver, err := storage.NewDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
+		driver, err := newStorageDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("storage driver init failed: %v", err))
 			return
@@ -234,7 +270,17 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		tenantID := r.Header.Get("X-Tenant-ID")
 		localBase := filepath.Join(serverCfg.StoragePath, tenantID)
 
-		driver, err := storage.NewDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
+		// Like uploads: a purge waits for this, and this doesn't start (and
+		// reopen the database) once a purge has begun.
+		gate := uploadGate(tenantID)
+		gate.RLock()
+		defer gate.RUnlock()
+		if !tenant.Serving(serverCfg.DataDir, tenantID) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tenant is not available"})
+			return
+		}
+
+		driver, err := newStorageDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("storage driver init failed: %v", err))
 			return
@@ -254,10 +300,83 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("file delete failed: %v", err))
 			return
 		}
+		if dbPool, err := pool.GetPool(r.Context(), cfg); err == nil {
+			dest := storage.Destination(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config)
+			if err := storage.UntrackUpload(r.Context(), dbPool, filePath, dest); err != nil {
+				slog.Warn("forget deleted upload", "tenant", tenantID, "error", err)
+			}
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data": map[string]any{"deleted": true},
 		})
+	}
+}
+
+// uploadGates holds one lock per tenant: uploads and file deletes share it
+// while they touch storage and the records, a purge takes it exclusively
+// before reading the records, so no upload can finish unrecorded.
+var uploadGates sync.Map // tenant id → *sync.RWMutex
+
+func uploadGate(tenantID string) *sync.RWMutex {
+	g, _ := uploadGates.LoadOrStore(tenantID, &sync.RWMutex{})
+	return g.(*sync.RWMutex)
+}
+
+// newStorageDriver is replaced in tests.
+var newStorageDriver = storage.NewDriver
+
+// deleteOrphan deletes a file uploaded to a tenant that a purge removed
+// meanwhile (its record may already be gone), bounded like
+// forgetFailedUpload.
+func deleteOrphan(ctx context.Context, driver storage.StorageDriver, tenantID, path string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- driver.Delete(ctx, path) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			slog.Error("upload to a purged tenant left a file behind", "tenant", tenantID, "path", path, "error", err)
+		}
+	case <-ctx.Done():
+		slog.Error("upload to a purged tenant left a file behind", "tenant", tenantID, "path", path, "error", "timed out")
+	}
+}
+
+// cleanupTimeout bounds forgetFailedUpload, which runs while the upload
+// still holds the tenant's upload gate (a purge waits for it).
+var cleanupTimeout = 30 * time.Second
+
+// forgetFailedUpload drops the record of an upload that failed, but only
+// once the file is confirmed absent (some drivers create it before the copy
+// fails); otherwise the record stays for a later purge. FTP and SFTP ignore
+// contexts, so the driver calls run in the background and are abandoned,
+// keeping the record, when they take too long.
+func forgetFailedUpload(ctx context.Context, driver storage.StorageDriver, db storage.Execer, path, dest string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	gone := make(chan bool, 1)
+	go func() {
+		exists, err := driver.Exists(ctx, path)
+		if err == nil && exists {
+			if driver.Delete(ctx, path) == nil {
+				exists, err = driver.Exists(ctx, path)
+			}
+		}
+		gone <- err == nil && !exists
+	}()
+	select {
+	case ok := <-gone:
+		if !ok {
+			return
+		}
+	case <-ctx.Done():
+		slog.Warn("failed upload cleanup timed out; keeping its record", "path", path)
+		return
+	}
+	if err := storage.UntrackUpload(ctx, db, path, dest); err != nil {
+		slog.Warn("forget failed upload", "path", path, "error", err)
 	}
 }
 
