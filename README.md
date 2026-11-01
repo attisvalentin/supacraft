@@ -346,7 +346,8 @@ supacraft tenants remove shop --purge
 
 Deploying a disabled tenant doesn't re-enable it. `--purge` deletes the database, secrets and
 uploads, including those in S3 or another remote storage driver: SupaCraft records every upload
-and deletes exactly those, never anything else in the bucket. If a remote file can't be deleted, nothing else is, the tenant stays disabled
+and deletes exactly those, never anything else in the bucket (if the tenant's storage settings
+changed, files in the earlier storage are reported for you to delete there). If a remote file can't be deleted, nothing else is, the tenant stays disabled
 and you can run it again. Pass `--default-tenant <id>` to `serve` if requests without the header
 should go to one tenant.
 

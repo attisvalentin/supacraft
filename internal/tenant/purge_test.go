@@ -46,11 +46,16 @@ func TestRemoveTenant_PurgesTrackedRemoteFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// gone.png was already deleted from the bucket by hand.
+	// gone.png was already deleted from the bucket by hand; old.png went
+	// to the bucket the tenant used before.
+	dest := storage.Destination("s3", map[string]any{"bucket": "b"})
 	for _, p := range []string{"a.png", "docs/b.pdf", "gone.png"} {
-		if err := storage.TrackUpload(ctx, db, p); err != nil {
+		if err := storage.TrackUpload(ctx, db, p, dest); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := storage.TrackUpload(ctx, db, "old.png", storage.Destination("s3", map[string]any{"bucket": "old"})); err != nil {
+		t.Fatal(err)
 	}
 	db.Close()
 
@@ -81,7 +86,7 @@ func TestRemoveTenant_PurgesTrackedRemoteFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.FilesDriver != "s3" || res.FilesDeleted != 3 {
+	if res.FilesDriver != "s3" || res.FilesDeleted != 3 || res.FilesLeft != 1 || len(res.FilesLeftIn) != 1 || res.FilesLeftIn[0] != "s3" {
 		t.Fatalf("result: %+v", res)
 	}
 	if len(bucket.files) != 1 || !bucket.files["other-app.txt"] {

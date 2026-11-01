@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/attisvalentin/supacraft/internal/storage"
 	"github.com/attisvalentin/supacraft/internal/tenant"
@@ -40,11 +41,11 @@ func TestFileUpload_IsTracked(t *testing.T) {
 	}
 	defer db.Close()
 	paths, err := storage.TrackedUploads(t.Context(), db)
-	if err != nil || len(paths) != 1 {
+	if err != nil || len(paths) != 1 || paths[0].Destination != "local" {
 		t.Fatalf("tracked: %v %v", paths, err)
 	}
 
-	if code, _, raw := a.do("DELETE", "/files/"+paths[0], "", "X-Tenant-ID", "demo"); code != 200 {
+	if code, _, raw := a.do("DELETE", "/files/"+paths[0].Path, "", "X-Tenant-ID", "demo"); code != 200 {
 		t.Fatalf("delete: %d %s", code, raw)
 	}
 	if paths, _ := storage.TrackedUploads(t.Context(), db); len(paths) != 0 {
@@ -81,19 +82,43 @@ func TestForgetFailedUpload_KeepsRecordOfLeftoverFile(t *testing.T) {
 	defer db.Close()
 	d := &flakyDriver{files: map[string]bool{}, deleteFail: true}
 	for _, p := range []string{"a.png", "b.png"} {
-		if err := storage.TrackUpload(ctx, db, p); err != nil {
+		if err := storage.TrackUpload(ctx, db, p, "s3:x"); err != nil {
 			t.Fatal(err)
 		}
 		_ = d.Put(ctx, p, nil, 0)
-		forgetFailedUpload(ctx, d, db, p)
+		forgetFailedUpload(ctx, d, db, p, "s3:x")
 		d.deleteFail = false
 	}
 	// a.png couldn't be deleted, so its record stays; b.png is gone.
 	paths, _ := storage.TrackedUploads(ctx, db)
-	if len(paths) != 1 || paths[0] != "a.png" || d.files["b.png"] {
+	if len(paths) != 1 || paths[0].Path != "a.png" || d.files["b.png"] {
 		t.Fatalf("records %v, files %v", paths, d.files)
 	}
+
+	// A driver that hangs is abandoned and the record kept.
+	cleanupTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { cleanupTimeout = 30 * time.Second })
+	hang := &hangingDriver{release: make(chan struct{})}
+	defer close(hang.release)
+	if err := storage.TrackUpload(ctx, db, "c.png", "s3:x"); err != nil {
+		t.Fatal(err)
+	}
+	forgetFailedUpload(ctx, hang, db, "c.png", "s3:x")
+	if paths, _ := storage.TrackedUploads(ctx, db); len(paths) != 2 {
+		t.Fatalf("record of a file with unknown state dropped: %v", paths)
+	}
 }
+
+// hangingDriver blocks every call until released (like FTP ignoring ctx).
+type hangingDriver struct{ release chan struct{} }
+
+func (d *hangingDriver) Put(context.Context, string, io.Reader, int64) error { <-d.release; return nil }
+func (d *hangingDriver) Get(context.Context, string) (io.ReadCloser, error) {
+	<-d.release
+	return nil, nil
+}
+func (d *hangingDriver) Exists(context.Context, string) (bool, error) { <-d.release; return true, nil }
+func (d *hangingDriver) Delete(context.Context, string) error         { <-d.release; return nil }
 
 func TestFileUpload_RefusedOnceTenantDisabled(t *testing.T) {
 	a := newTestAPIWith(t, `{"name": "demo", "api_settings": {"storage": {"driver": "local"}}}`)

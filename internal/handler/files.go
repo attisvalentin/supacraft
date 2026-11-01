@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/attisvalentin/supacraft/internal/config"
 	"github.com/attisvalentin/supacraft/internal/middleware"
@@ -136,7 +137,8 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			writeErrorJSON(w, r, http.StatusInternalServerError, "database unavailable")
 			return
 		}
-		if err := storage.TrackUpload(r.Context(), dbPool, storagePath); err != nil {
+		dest := storage.Destination(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config)
+		if err := storage.TrackUpload(r.Context(), dbPool, storagePath, dest); err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("record upload: %v", err))
 			return
 		}
@@ -145,7 +147,7 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		combinedReader := io.MultiReader(bytes.NewReader(buf), file)
 
 		if err := driver.Put(r.Context(), storagePath, combinedReader, header.Size); err != nil {
-			forgetFailedUpload(context.WithoutCancel(r.Context()), driver, dbPool, storagePath)
+			forgetFailedUpload(r.Context(), driver, dbPool, storagePath, dest)
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("file upload failed: %v", err))
 			return
 		}
@@ -280,7 +282,8 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			return
 		}
 		if dbPool, err := pool.GetPool(r.Context(), cfg); err == nil {
-			if err := storage.UntrackUpload(r.Context(), dbPool, filePath); err != nil {
+			dest := storage.Destination(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config)
+			if err := storage.UntrackUpload(r.Context(), dbPool, filePath, dest); err != nil {
 				slog.Warn("forget deleted upload", "tenant", tenantID, "error", err)
 			}
 		}
@@ -301,16 +304,38 @@ func uploadGate(tenantID string) *sync.RWMutex {
 	return g.(*sync.RWMutex)
 }
 
+// cleanupTimeout bounds forgetFailedUpload, which runs while the upload
+// still holds the tenant's upload gate (a purge waits for it).
+var cleanupTimeout = 30 * time.Second
+
 // forgetFailedUpload drops the record of an upload that failed, but only
-// once no partial file is left behind (some drivers create the file before
-// the copy fails); otherwise the record stays for a later purge.
-func forgetFailedUpload(ctx context.Context, driver storage.StorageDriver, db storage.Execer, path string) {
-	if exists, err := driver.Exists(ctx, path); err != nil || exists {
-		if driver.Delete(ctx, path) != nil {
+// once the file is confirmed absent (some drivers create it before the copy
+// fails); otherwise the record stays for a later purge. FTP and SFTP ignore
+// contexts, so the driver calls run in the background and are abandoned,
+// keeping the record, when they take too long.
+func forgetFailedUpload(ctx context.Context, driver storage.StorageDriver, db storage.Execer, path, dest string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	gone := make(chan bool, 1)
+	go func() {
+		exists, err := driver.Exists(ctx, path)
+		if err == nil && exists {
+			if driver.Delete(ctx, path) == nil {
+				exists, err = driver.Exists(ctx, path)
+			}
+		}
+		gone <- err == nil && !exists
+	}()
+	select {
+	case ok := <-gone:
+		if !ok {
 			return
 		}
+	case <-ctx.Done():
+		slog.Warn("failed upload cleanup timed out; keeping its record", "path", path)
+		return
 	}
-	if err := storage.UntrackUpload(ctx, db, path); err != nil {
+	if err := storage.UntrackUpload(ctx, db, path, dest); err != nil {
 		slog.Warn("forget failed upload", "path", path, "error", err)
 	}
 }

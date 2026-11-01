@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
+	"net/textproto"
 	"path"
 	"time"
 
@@ -141,7 +143,12 @@ func (d *FTPDriver) Exists(_ context.Context, filePath string) (bool, error) {
 
 	_, err = conn.FileSize(d.fullPath(filePath))
 	if err != nil {
-		return false, nil
+		// 550 is "no such file"; anything else is not an answer.
+		var te *textproto.Error
+		if errors.As(err, &te) && te.Code == ftp.StatusFileUnavailable {
+			return false, nil
+		}
+		return false, err
 	}
 	return true, nil
 }

@@ -47,7 +47,7 @@ func (s *server) listTenants(ctx context.Context) (*mcp.CallToolResult, any, err
 		"server":       srv,
 		"this_project": p.TenantID(),
 		"tenants":      out.Data,
-		"note":         "Disabling or removing a tenant is done by the user with `supacraft tenants disable|enable|remove <id>`; suggest the command, don't run it.",
+		"note":         "Disabling or removing a tenant is done by the user with `supacraft tenants disable|enable|remove <id> --server " + srv + "`; suggest the command, don't run it.",
 	}), nil, nil
 }
 

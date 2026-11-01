@@ -36,7 +36,8 @@ func New(server, secret string) (*Client, error) {
 	}
 	u, err := url.Parse(strings.TrimRight(server, "/"))
 	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("invalid server URL %q", server)
+		// Not quoted: a malformed URL can still hold a password.
+		return nil, fmt.Errorf("invalid server URL (check --server or SUPACRAFT_SERVER)")
 	}
 	// Credentials in the URL would be echoed in messages and tool results.
 	if u.User != nil {

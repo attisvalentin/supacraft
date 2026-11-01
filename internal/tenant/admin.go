@@ -102,6 +102,11 @@ type RemoveResult struct {
 	// local disk); FilesDeleted counts the uploads deleted there.
 	FilesDriver  string `json:"files_driver,omitempty"`
 	FilesDeleted int    `json:"files_deleted"`
+	// FilesLeft counts uploads recorded in a storage the tenant no longer
+	// uses (its settings changed); without those credentials SupaCraft
+	// can't delete them. FilesLeftIn names their drivers.
+	FilesLeft   int      `json:"files_left,omitempty"`
+	FilesLeftIn []string `json:"files_left_in,omitempty"`
 }
 
 // RemoveTenant stops serving a tenant by deleting its config. With purge it
@@ -122,11 +127,15 @@ func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bo
 			return nil, fmt.Errorf("disable tenant: %w", err)
 		}
 		base := filepath.Join(dataDir, cfg.DBName)
-		if st := cfg.APISettings.Storage; st != nil && st.Driver != "" && st.Driver != "local" {
+		var st StorageConfig
+		if cfg.APISettings.Storage != nil {
+			st = *cfg.APISettings.Storage
+		}
+		if st.Driver != "" && st.Driver != "local" {
 			res.FilesDriver = st.Driver
-			if res.FilesDeleted, err = purgeRemoteFiles(ctx, base+".db", st.Driver, st.Config); err != nil {
-				return nil, fmt.Errorf("delete files in %s storage (nothing else was deleted, retry): %w", st.Driver, err)
-			}
+		}
+		if err := purgeRemoteFiles(ctx, base+".db", st, res); err != nil {
+			return nil, fmt.Errorf("delete files in %s storage (nothing else was deleted, retry): %w", st.Driver, err)
 		}
 		for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
 			if err := os.Remove(base + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -154,33 +163,55 @@ func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bo
 // newStorageDriver is replaced in tests.
 var newStorageDriver = storage.NewDriver
 
-// purgeRemoteFiles deletes the uploads recorded in the tenant database from
-// its remote storage. Files already gone count as deleted, so a retry after
-// a partial failure finishes the job.
-func purgeRemoteFiles(ctx context.Context, dbPath, driverName string, driverCfg map[string]any) (int, error) {
+// purgeRemoteFiles deletes the uploads recorded in the tenant database
+// from its current remote storage and counts, in res, those recorded in a
+// storage it no longer uses. Local uploads are deleted with the tenant's
+// directory. Files already gone count as deleted, so a retry after a
+// partial failure finishes the job.
+func purgeRemoteFiles(ctx context.Context, dbPath string, st StorageConfig, res *RemoveResult) error {
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return nil
 	}
 	u := url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer db.Close()
-	paths, err := storage.TrackedUploads(ctx, db)
-	if err != nil || len(paths) == 0 {
-		return 0, err
-	}
-	driver, err := newStorageDriver(driverName, driverCfg, "")
+	uploads, err := storage.TrackedUploads(ctx, db)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	for i, p := range paths {
-		if err := driver.Delete(ctx, p); err != nil {
-			if exists, xerr := driver.Exists(ctx, p); xerr != nil || exists {
-				return i, fmt.Errorf("%s: %w", p, err)
-			}
+	current := storage.Destination(st.Driver, st.Config)
+	var mine []string
+	left := map[string]bool{}
+	for _, up := range uploads {
+		switch {
+		case up.Destination == current:
+			mine = append(mine, up.Path)
+		case up.Destination != "local":
+			res.FilesLeft++
+			left[storage.DriverOf(up.Destination)] = true
 		}
 	}
-	return len(paths), nil
+	for d := range left {
+		res.FilesLeftIn = append(res.FilesLeftIn, d)
+	}
+	sort.Strings(res.FilesLeftIn)
+	if current == "local" || len(mine) == 0 {
+		return nil
+	}
+	driver, err := newStorageDriver(st.Driver, st.Config, "")
+	if err != nil {
+		return err
+	}
+	for _, p := range mine {
+		if err := driver.Delete(ctx, p); err != nil {
+			if exists, xerr := driver.Exists(ctx, p); xerr != nil || exists {
+				return fmt.Errorf("%s: %w", p, err)
+			}
+		}
+		res.FilesDeleted++
+	}
+	return nil
 }

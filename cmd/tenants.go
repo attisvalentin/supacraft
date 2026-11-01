@@ -146,6 +146,9 @@ unless --yes is given.`,
 		if res.FilesDriver != "" {
 			fmt.Printf("  deleted %d uploaded file(s) from %s storage\n", res.FilesDeleted, res.FilesDriver)
 		}
+		if res.FilesLeft > 0 {
+			fmt.Printf("  ⚠ %d file(s) uploaded before its storage settings changed are still in the earlier %s storage; delete them there\n", res.FilesLeft, strings.Join(res.FilesLeftIn, ", "))
+		}
 		return nil
 	},
 }
