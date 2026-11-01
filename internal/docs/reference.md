@@ -802,11 +802,11 @@ Both mail a one-time link and need `api_settings.email.smtp` and a template in `
 | Endpoint | Body | Response |
 |---|---|---|
 | `POST /auth/forgot-password` | `{"email"}` | always `202`, whether or not the email has an account |
-| `POST /auth/reset-password` | `{"token", "password"}` | `200`; sets the password, marks the email verified and ends all earlier sessions. `400` for an invalid, used or expired token |
-| `POST /auth/verify-email` | `{"token"}` | `200`, or `400` for an invalid, used or expired token |
+| `POST /auth/reset-password` | `{"token", "password"}` | `200`; sets the password, marks the email verified and ends all earlier sessions. `400` for a malformed body, a password that breaks the password rules, or an invalid, used or expired token |
+| `POST /auth/verify-email` | `{"token"}` | `200`, or `400` for a malformed body or an invalid, used or expired token |
 | `POST /auth/resend-verification` | `{"email"}` | always `202`; mails a new link to an unverified account |
 
-A new verification link is also mailed on `/auth/register` when `email_verification` is set.
+All four answer `404` when their flow isn't configured. A new verification link is also mailed on `/auth/register` when `email_verification` is set.
 
 ---
 

@@ -127,6 +127,12 @@ func (pm *PoolManager) GetPool(ctx context.Context, cfg *TenantConfig) (*DB, err
 		sqlDB.Close()
 		return nil, fmt.Errorf("failed to ping sqlite: %w", err)
 	}
+	if cfg.AuthEnabled {
+		if err := ensureAuthSchema(ctx, sqlDB); err != nil {
+			sqlDB.Close()
+			return nil, fmt.Errorf("auth schema: %w", err)
+		}
+	}
 
 	entry := &poolEntry{db: &DB{DB: sqlDB}}
 	entry.touch()

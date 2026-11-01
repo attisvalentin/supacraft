@@ -2,8 +2,11 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -159,6 +162,10 @@ func HandleLogin(pool *tenant.PoolManager) http.HandlerFunc {
 			`SELECT "id", "password", COALESCE("is_active", 1), COALESCE("email_verified", 0), COALESCE("session_version", 0) FROM "users" WHERE "email" = ?`,
 			req.Email,
 		).Scan(&userID, &hashedPassword, &active, &verified, &version)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("login query: %v", err))
+			return
+		}
 		if err != nil {
 			// Spend the same bcrypt time as a real check, so response timing
 			// doesn't reveal which emails are registered.
@@ -403,6 +410,9 @@ func sessionVersion(ctx context.Context, db *tenant.DB, userID string) (version 
 	err := db.QueryRow(ctx,
 		`SELECT COALESCE("is_active", 1), COALESCE("session_version", 0) FROM "users" WHERE "id" = ?`, userID,
 	).Scan(&active, &version)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		slog.Warn("session check failed", "error", err)
+	}
 	return version, err == nil && active
 }
 

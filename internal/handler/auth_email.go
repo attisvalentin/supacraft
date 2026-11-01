@@ -283,9 +283,18 @@ func mailAuthLink(db *tenant.DB, cfg *tenant.TenantConfig, tenantID, path string
 		return
 	}
 
+	// One transaction holds the tenant's only connection, so concurrent
+	// requests can't all pass the throttle, and a failed insert keeps the
+	// previous token.
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		fail(err)
+		return
+	}
+	defer tx.Rollback()
 	now := time.Now()
 	var recent int
-	if err := db.QueryRow(ctx,
+	if err := tx.QueryRow(ctx,
 		`SELECT COUNT(*) FROM "_supacraft_auth_tokens" WHERE "user_id" = ? AND "purpose" = ? AND "created_at" > ?`,
 		userID, purpose, now.Add(-authEmailInterval).Unix()).Scan(&recent); err != nil {
 		fail(err)
@@ -303,13 +312,17 @@ func mailAuthLink(db *tenant.DB, cfg *tenant.TenantConfig, tenantID, path string
 	token := hex.EncodeToString(raw)
 	ttl := flow.TTL(defTTL)
 	// Only the newest link of a purpose works.
-	if _, err := db.Exec(ctx, `DELETE FROM "_supacraft_auth_tokens" WHERE "user_id" = ? AND "purpose" = ?`, userID, purpose); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM "_supacraft_auth_tokens" WHERE "user_id" = ? AND "purpose" = ?`, userID, purpose); err != nil {
 		fail(err)
 		return
 	}
-	if _, err := db.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO "_supacraft_auth_tokens" ("token_hash", "user_id", "purpose", "expires_at", "created_at") VALUES (?, ?, ?, ?, ?)`,
 		hashToken(token), userID, purpose, now.Add(ttl).Unix(), now.Unix()); err != nil {
+		fail(err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		fail(err)
 		return
 	}
