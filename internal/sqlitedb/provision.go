@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 
 	"github.com/attisvalentin/supacraft/internal/config"
+	"github.com/attisvalentin/supacraft/internal/tenant"
 	_ "modernc.org/sqlite"
 )
 
@@ -101,6 +102,7 @@ func (p *Provisioner) RunTenantMigrations(ctx context.Context, dbName string) er
 			updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 	}
+	migrations = append(migrations, tenant.AuthTokensDDL...)
 	for _, sqlText := range migrations {
 		if _, err := db.ExecContext(ctx, sqlText); err != nil {
 			return fmt.Errorf("migration failed: %w", err)

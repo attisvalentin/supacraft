@@ -2,6 +2,8 @@ package tenant
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/attisvalentin/supacraft/internal/config"
@@ -60,5 +62,34 @@ func TestGetPool_RejectsEmptyDBName(t *testing.T) {
 	pm := NewPoolManager(&config.Config{DataDir: t.TempDir()})
 	if _, err := pm.GetPool(context.Background(), &TenantConfig{}); err == nil {
 		t.Fatal("expected error for config with no db_name / tenant_id")
+	}
+}
+
+// A database applied by an older version gets the newer auth columns and
+// token table when it is opened, so an upgraded server works before the
+// next deploy.
+func TestGetPool_MigratesOldAuthSchema(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	old, err := sql.Open("sqlite", filepath.Join(dir, "shop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	pm := NewPoolManager(&config.Config{DataDir: dir})
+	db, err := pm.GetPool(ctx, &TenantConfig{DBName: "shop", AuthEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var active, verified, version int
+	if err := db.QueryRow(ctx, `SELECT COALESCE("is_active", 1), COALESCE("email_verified", 0), COALESCE("session_version", 0) FROM users`).Scan(&active, &verified, &version); err != nil && err != sql.ErrNoRows {
+		t.Fatalf("auth columns missing: %v", err)
+	}
+	if _, err := db.Exec(ctx, `SELECT COUNT(*) FROM "_supacraft_auth_tokens"`); err != nil {
+		t.Fatalf("token table missing: %v", err)
 	}
 }

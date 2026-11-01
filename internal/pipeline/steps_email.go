@@ -274,6 +274,16 @@ func resolveTemplateData(raw map[string]any, pCtx *PipelineContext) (map[string]
 	return ResolveMap(raw, pCtx)
 }
 
+// RenderEmailTemplate renders a template from api_settings.email.templates
+// (used by the auth emails).
+func RenderEmailTemplate(cfg *tenant.TenantConfig, templateID string, data map[string]any) (subject, htmlBody, textBody string, err error) {
+	tpl, err := resolveTenantTemplate(cfg, templateID)
+	if err != nil {
+		return "", "", "", err
+	}
+	return renderTenantTemplate(templateID, tpl, data)
+}
+
 func resolveTenantTemplate(cfg *tenant.TenantConfig, templateID string) (tenant.EmailTemplate, error) {
 	if cfg == nil {
 		return tenant.EmailTemplate{}, errors.New("missing tenant config")

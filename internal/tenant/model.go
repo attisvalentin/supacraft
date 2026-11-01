@@ -114,6 +114,34 @@ type AuthSettings struct {
 	AccessTokenTTL    *int `json:"access_token_ttl,omitempty"`
 	RefreshTokenTTL   *int `json:"refresh_token_ttl,omitempty"`
 	PasswordMinLength *int `json:"password_min_length,omitempty"`
+	// PasswordReset enables /auth/forgot-password and /auth/reset-password;
+	// EmailVerification enables /auth/verify-email and
+	// /auth/resend-verification and mails a link on register.
+	PasswordReset     *AuthEmailFlow `json:"password_reset,omitempty"`
+	EmailVerification *AuthEmailFlow `json:"email_verification,omitempty"`
+}
+
+// AuthEmailFlow mails a one-time link: Template (from email.templates)
+// gets {{.link}}, {{.token}}, {{.email}} and {{.expires_in_minutes}}; URL
+// is the app page that takes the token, with a "{token}" placeholder.
+type AuthEmailFlow struct {
+	Template string `json:"template"`
+	URL      string `json:"url"`
+	TokenTTL int    `json:"token_ttl,omitempty"` // seconds
+	// Required (email_verification only) refuses login until the email
+	// is verified.
+	Required bool `json:"required,omitempty"`
+}
+
+// Enabled reports whether the flow is configured.
+func (f *AuthEmailFlow) Enabled() bool { return f != nil && f.Template != "" && f.URL != "" }
+
+// TTL returns the token lifetime, def when unset.
+func (f *AuthEmailFlow) TTL(def time.Duration) time.Duration {
+	if f == nil || f.TokenTTL <= 0 {
+		return def
+	}
+	return time.Duration(f.TokenTTL) * time.Second
 }
 
 const defaultPasswordMinLength = 8
