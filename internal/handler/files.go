@@ -261,6 +261,16 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		tenantID := r.Header.Get("X-Tenant-ID")
 		localBase := filepath.Join(serverCfg.StoragePath, tenantID)
 
+		// Like uploads: a purge waits for this, and this doesn't start (and
+		// reopen the database) once a purge has begun.
+		gate := uploadGate(tenantID)
+		gate.RLock()
+		defer gate.RUnlock()
+		if !tenant.Serving(serverCfg.DataDir, tenantID) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tenant is not available"})
+			return
+		}
+
 		driver, err := storage.NewDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("storage driver init failed: %v", err))
@@ -294,9 +304,9 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 	}
 }
 
-// uploadGates holds one lock per tenant: uploads share it from recording
-// the file until it is written, a purge takes it exclusively before reading
-// the records, so no upload can finish unrecorded.
+// uploadGates holds one lock per tenant: uploads and file deletes share it
+// while they touch storage and the records, a purge takes it exclusively
+// before reading the records, so no upload can finish unrecorded.
 var uploadGates sync.Map // tenant id → *sync.RWMutex
 
 func uploadGate(tenantID string) *sync.RWMutex {

@@ -141,14 +141,25 @@ func (d *FTPDriver) Exists(_ context.Context, filePath string) (bool, error) {
 	}
 	defer conn.Quit()
 
-	_, err = conn.FileSize(d.fullPath(filePath))
-	if err != nil {
-		// 550 is "no such file"; anything else is not an answer.
-		var te *textproto.Error
-		if errors.As(err, &te) && te.Code == ftp.StatusFileUnavailable {
-			return false, nil
-		}
+	full := d.fullPath(filePath)
+	_, err = conn.FileSize(full)
+	if err == nil {
+		return true, nil
+	}
+	// 550 also means "access denied" or "size unavailable", so absence is
+	// confirmed by listing the directory; anything else is not an answer.
+	var te *textproto.Error
+	if !errors.As(err, &te) || te.Code != ftp.StatusFileUnavailable {
 		return false, err
 	}
-	return true, nil
+	names, err := conn.NameList(path.Dir(full))
+	if err != nil {
+		return false, fmt.Errorf("check %s: %w", filePath, err)
+	}
+	for _, n := range names {
+		if path.Base(n) == path.Base(full) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
