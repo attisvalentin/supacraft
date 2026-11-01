@@ -253,7 +253,7 @@ func (s *server) register(srv *mcp.Server) {
 			return s.getLogs(ctx, in.Limit)
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_server_errors", Description: "Recent unexpected errors (5xx) of this project's tenant on the central server (SUPACRAFT_SERVER), newest first, with the internal message; secret values are masked. Use it after a deploy to see what failed in production; get_logs covers the local API."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_server_errors", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Recent unexpected errors (5xx) of this project's tenant on the central server (SUPACRAFT_SERVER), newest first, with the internal message; secret values are masked. Use it after a deploy to see what failed in production; get_logs covers the local API."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Limit int `json:"limit,omitempty"`
 		}) (*mcp.CallToolResult, any, error) {
@@ -263,7 +263,7 @@ func (s *server) register(srv *mcp.Server) {
 			return s.serverErrors(ctx, in.Limit)
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "list_tenants", Description: "List every tenant (API) on the central server (SUPACRAFT_SERVER): id, name, enabled/disabled, table/function/cron counts, database size, last update. Read-only."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "list_tenants", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List every tenant (API) on the central server (SUPACRAFT_SERVER): id, name, enabled/disabled, table/function/cron counts, database size, last update. Read-only."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 			return s.listTenants(ctx)
 		})

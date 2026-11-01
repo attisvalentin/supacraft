@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/attisvalentin/supacraft/internal/config"
 	"github.com/attisvalentin/supacraft/internal/middleware"
@@ -119,6 +120,16 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			return
 		}
 
+		// A purge waits for uploads in flight (see uploadGate); one that
+		// starts after the purge began finds the tenant gone.
+		gate := uploadGate(tenantID)
+		gate.RLock()
+		defer gate.RUnlock()
+		if !tenant.Serving(serverCfg.DataDir, tenantID) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tenant is not available"})
+			return
+		}
+
 		// Record the upload first, so purging the tenant can find the file.
 		dbPool, err := pool.GetPool(r.Context(), cfg)
 		if err != nil {
@@ -134,7 +145,7 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		combinedReader := io.MultiReader(bytes.NewReader(buf), file)
 
 		if err := driver.Put(r.Context(), storagePath, combinedReader, header.Size); err != nil {
-			_ = storage.UntrackUpload(context.WithoutCancel(r.Context()), dbPool, storagePath)
+			forgetFailedUpload(context.WithoutCancel(r.Context()), driver, dbPool, storagePath)
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("file upload failed: %v", err))
 			return
 		}
@@ -277,6 +288,30 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data": map[string]any{"deleted": true},
 		})
+	}
+}
+
+// uploadGates holds one lock per tenant: uploads share it from recording
+// the file until it is written, a purge takes it exclusively before reading
+// the records, so no upload can finish unrecorded.
+var uploadGates sync.Map // tenant id → *sync.RWMutex
+
+func uploadGate(tenantID string) *sync.RWMutex {
+	g, _ := uploadGates.LoadOrStore(tenantID, &sync.RWMutex{})
+	return g.(*sync.RWMutex)
+}
+
+// forgetFailedUpload drops the record of an upload that failed, but only
+// once no partial file is left behind (some drivers create the file before
+// the copy fails); otherwise the record stays for a later purge.
+func forgetFailedUpload(ctx context.Context, driver storage.StorageDriver, db storage.Execer, path string) {
+	if exists, err := driver.Exists(ctx, path); err != nil || exists {
+		if driver.Delete(ctx, path) != nil {
+			return
+		}
+	}
+	if err := storage.UntrackUpload(ctx, db, path); err != nil {
+		slog.Warn("forget failed upload", "path", path, "error", err)
 	}
 }
 

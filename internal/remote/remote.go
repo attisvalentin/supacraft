@@ -38,6 +38,10 @@ func New(server, secret string) (*Client, error) {
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("invalid server URL %q", server)
 	}
+	// Credentials in the URL would be echoed in messages and tool results.
+	if u.User != nil {
+		return nil, fmt.Errorf("server URL must not contain a user name or password")
+	}
 	switch u.Scheme {
 	case "https":
 	case "http":

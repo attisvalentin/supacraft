@@ -56,7 +56,11 @@ func HandleTenantRemove(cfg *config.Config, store *tenant.CachedStore, pool *ten
 		}
 		purge := r.URL.Query().Get("purge") == "true"
 		// For masking a failure message; the purge deletes the secrets.
-		vals, _ := secrets.New(cfg.DataDir).Values(id)
+		vals, err := secrets.New(cfg.DataDir).Values(id)
+		if err != nil {
+			writeErrorJSON(w, r, http.StatusInternalServerError, "read secrets: "+err.Error())
+			return
+		}
 		deployMu.Lock()
 		defer deployMu.Unlock()
 		if purge {
@@ -67,6 +71,11 @@ func HandleTenantRemove(cfg *config.Config, store *tenant.CachedStore, pool *ten
 				return
 			}
 			store.Invalidate()
+			// Wait for uploads in flight, so each is recorded before the
+			// purge reads the records.
+			gate := uploadGate(id)
+			gate.Lock()
+			defer gate.Unlock()
 			pool.Drop(id)
 		}
 		res, err := tenant.RemoveTenant(r.Context(), cfg.DataDir, cfg.StoragePath, id, purge)
@@ -149,12 +158,12 @@ func MaskSecrets(s string, vals map[string]string) string {
 	return s
 }
 
-func queryInt(r *http.Request, key string, def, max int) int {
+func queryInt(r *http.Request, key string, def, upper int) int {
 	n, err := strconv.Atoi(r.URL.Query().Get(key))
 	if err != nil || n < 0 {
 		return def
 	}
-	return min(n, max)
+	return min(n, upper)
 }
 
 func writeTenantErr(w http.ResponseWriter, r *http.Request, err error) {

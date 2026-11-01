@@ -2,12 +2,17 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"errors"
+	"io"
 	"mime/multipart"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/attisvalentin/supacraft/internal/storage"
+	"github.com/attisvalentin/supacraft/internal/tenant"
 )
 
 // Every upload is recorded in the tenant database so a purge can delete it
@@ -44,5 +49,69 @@ func TestFileUpload_IsTracked(t *testing.T) {
 	}
 	if paths, _ := storage.TrackedUploads(t.Context(), db); len(paths) != 0 {
 		t.Fatalf("deleted file still tracked: %v", paths)
+	}
+}
+
+// flakyDriver fails Put after leaving a partial file; Delete can fail too.
+type flakyDriver struct {
+	files      map[string]bool
+	deleteFail bool
+}
+
+func (d *flakyDriver) Put(_ context.Context, p string, _ io.Reader, _ int64) error {
+	d.files[p] = true
+	return errors.New("connection reset")
+}
+func (d *flakyDriver) Get(context.Context, string) (io.ReadCloser, error) { return nil, nil }
+func (d *flakyDriver) Exists(_ context.Context, p string) (bool, error)   { return d.files[p], nil }
+func (d *flakyDriver) Delete(_ context.Context, p string) error {
+	if d.deleteFail {
+		return errors.New("access denied")
+	}
+	delete(d.files, p)
+	return nil
+}
+
+func TestForgetFailedUpload_KeepsRecordOfLeftoverFile(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	d := &flakyDriver{files: map[string]bool{}, deleteFail: true}
+	for _, p := range []string{"a.png", "b.png"} {
+		if err := storage.TrackUpload(ctx, db, p); err != nil {
+			t.Fatal(err)
+		}
+		_ = d.Put(ctx, p, nil, 0)
+		forgetFailedUpload(ctx, d, db, p)
+		d.deleteFail = false
+	}
+	// a.png couldn't be deleted, so its record stays; b.png is gone.
+	paths, _ := storage.TrackedUploads(ctx, db)
+	if len(paths) != 1 || paths[0] != "a.png" || d.files["b.png"] {
+		t.Fatalf("records %v, files %v", paths, d.files)
+	}
+}
+
+func TestFileUpload_RefusedOnceTenantDisabled(t *testing.T) {
+	a := newTestAPIWith(t, `{"name": "demo", "api_settings": {"storage": {"driver": "local"}}}`)
+	if err := tenant.SetDisabled(filepath.Dir(a.dbPath), "demo", true); err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "note.txt")
+	fw.Write([]byte("hello"))
+	mw.Close()
+	// The cached config still says enabled; the upload checks the disk.
+	req := httptest.NewRequest("POST", "/files", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-Tenant-ID", "demo")
+	rec := httptest.NewRecorder()
+	a.handler.ServeHTTP(rec, req)
+	if rec.Code != 503 {
+		t.Fatalf("upload to a disabled tenant: %d %s", rec.Code, rec.Body)
 	}
 }

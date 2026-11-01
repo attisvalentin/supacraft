@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +39,15 @@ func SetDisabled(dataDir, id string, disabled bool) error {
 		return nil
 	}
 	return os.WriteFile(p, nil, 0o600)
+}
+
+// Serving reports whether a tenant has a config and is not disabled.
+func Serving(dataDir, id string) bool {
+	if !ValidTenantID(id) || isDisabled(dataDir, id) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dataDir, "tenants", id+".json"))
+	return err == nil
 }
 
 // isDisabled fails closed: a marker that can't be checked counts as set.
@@ -151,7 +161,8 @@ func purgeRemoteFiles(ctx context.Context, dbPath, driverName string, driverCfg 
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	u := url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}
+	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		return 0, err
 	}

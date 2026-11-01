@@ -12,10 +12,15 @@ import (
 // Project validation reserves the "_supacraft_" table prefix.
 const FilesTable = "_supacraft_files"
 
-const createFilesTable = `CREATE TABLE IF NOT EXISTS ` + FilesTable + ` (
-	path TEXT PRIMARY KEY,
-	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+// Fixed identifiers, quoted like query.QuoteIdent would (importing it here
+// would be an import cycle).
+const (
+	filesTableSQL    = `"` + FilesTable + `"`
+	createFilesTable = `CREATE TABLE IF NOT EXISTS ` + filesTableSQL + ` (
+	"path" TEXT PRIMARY KEY,
+	"created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`
+)
 
 // Execer is the part of *sql.DB (and *tenant.DB) tracking needs.
 type Execer interface {
@@ -28,13 +33,13 @@ func TrackUpload(ctx context.Context, db Execer, path string) error {
 	if _, err := db.ExecContext(ctx, createFilesTable); err != nil {
 		return err
 	}
-	_, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO `+FilesTable+` (path) VALUES (?)`, path)
+	_, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO `+filesTableSQL+` ("path") VALUES (?)`, path)
 	return err
 }
 
 // UntrackUpload forgets path after it is deleted (or failed to upload).
 func UntrackUpload(ctx context.Context, db Execer, path string) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM `+FilesTable+` WHERE path = ?`, path)
+	_, err := db.ExecContext(ctx, `DELETE FROM `+filesTableSQL+` WHERE "path" = ?`, path)
 	if err != nil && strings.Contains(err.Error(), "no such table") {
 		return nil
 	}
@@ -43,7 +48,7 @@ func UntrackUpload(ctx context.Context, db Execer, path string) error {
 
 // TrackedUploads lists the recorded paths (none if nothing was uploaded).
 func TrackedUploads(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT path FROM `+FilesTable+` ORDER BY path`)
+	rows, err := db.QueryContext(ctx, `SELECT "path" FROM `+filesTableSQL+` ORDER BY "path"`)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table") {
 			return nil, nil

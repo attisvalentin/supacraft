@@ -235,7 +235,7 @@ func tenantsTarget() (*tenantsTargetInfo, error) {
 		return env[k]
 	}
 	if tenantsServer == "" {
-		if dir := firstNonEmpty(tenantsDataDir, os.Getenv("SUPACRAFT_DATA_DIR")); dir != "" {
+		if dir := firstNonEmpty(tenantsDataDir, lookup("SUPACRAFT_DATA_DIR")); dir != "" {
 			abs, err := filepath.Abs(dir)
 			if err != nil {
 				return nil, err
