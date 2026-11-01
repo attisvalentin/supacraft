@@ -115,7 +115,7 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		tenantID := r.Header.Get("X-Tenant-ID")
 		localBase := filepath.Join(serverCfg.StoragePath, tenantID)
 
-		driver, err := storage.NewDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
+		driver, err := newStorageDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("storage driver init failed: %v", err))
 			return
@@ -149,6 +149,15 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		if err := driver.Put(r.Context(), storagePath, combinedReader, header.Size); err != nil {
 			forgetFailedUpload(r.Context(), driver, dbPool, storagePath, dest)
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("file upload failed: %v", err))
+			return
+		}
+		// A purge from another process (tenants remove --purge --data-dir)
+		// doesn't see uploadGate. It disables the tenant before reading the
+		// records, so an upload that finishes after that read finds the
+		// tenant gone here and removes its own file.
+		if !tenant.Serving(serverCfg.DataDir, tenantID) {
+			deleteOrphan(r.Context(), driver, tenantID, storagePath)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tenant is not available"})
 			return
 		}
 
@@ -192,7 +201,7 @@ func HandleFileDownload(pool *tenant.PoolManager, serverCfg *config.Config) http
 		tenantID := r.Header.Get("X-Tenant-ID")
 		localBase := filepath.Join(serverCfg.StoragePath, tenantID)
 
-		driver, err := storage.NewDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
+		driver, err := newStorageDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("storage driver init failed: %v", err))
 			return
@@ -271,7 +280,7 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			return
 		}
 
-		driver, err := storage.NewDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
+		driver, err := newStorageDriver(cfg.APISettings.Storage.Driver, cfg.APISettings.Storage.Config, localBase)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("storage driver init failed: %v", err))
 			return
@@ -312,6 +321,27 @@ var uploadGates sync.Map // tenant id → *sync.RWMutex
 func uploadGate(tenantID string) *sync.RWMutex {
 	g, _ := uploadGates.LoadOrStore(tenantID, &sync.RWMutex{})
 	return g.(*sync.RWMutex)
+}
+
+// newStorageDriver is replaced in tests.
+var newStorageDriver = storage.NewDriver
+
+// deleteOrphan deletes a file uploaded to a tenant that a purge removed
+// meanwhile (its record may already be gone), bounded like
+// forgetFailedUpload.
+func deleteOrphan(ctx context.Context, driver storage.StorageDriver, tenantID, path string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- driver.Delete(ctx, path) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			slog.Error("upload to a purged tenant left a file behind", "tenant", tenantID, "path", path, "error", err)
+		}
+	case <-ctx.Done():
+		slog.Error("upload to a purged tenant left a file behind", "tenant", tenantID, "path", path, "error", "timed out")
+	}
 }
 
 // cleanupTimeout bounds forgetFailedUpload, which runs while the upload

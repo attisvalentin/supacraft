@@ -140,3 +140,42 @@ func TestFileUpload_RefusedOnceTenantDisabled(t *testing.T) {
 		t.Fatalf("upload to a disabled tenant: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// purgingDriver simulates a purge from another process that disables the
+// tenant while a file is being written.
+type purgingDriver struct {
+	dataDir string
+	files   map[string]bool
+}
+
+func (d *purgingDriver) Put(_ context.Context, p string, _ io.Reader, _ int64) error {
+	d.files[p] = true
+	return tenant.SetDisabled(d.dataDir, "demo", true)
+}
+func (d *purgingDriver) Get(context.Context, string) (io.ReadCloser, error) { return nil, nil }
+func (d *purgingDriver) Exists(_ context.Context, p string) (bool, error)   { return d.files[p], nil }
+func (d *purgingDriver) Delete(_ context.Context, p string) error {
+	delete(d.files, p)
+	return nil
+}
+
+func TestFileUpload_RemovesItsFileWhenPurgedMeanwhile(t *testing.T) {
+	a := newTestAPIWith(t, `{"name": "demo", "api_settings": {"storage": {"driver": "local"}}}`)
+	d := &purgingDriver{dataDir: filepath.Dir(a.dbPath), files: map[string]bool{}}
+	newStorageDriver = func(string, map[string]any, string) (storage.StorageDriver, error) { return d, nil }
+	t.Cleanup(func() { newStorageDriver = storage.NewDriver })
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "note.txt")
+	fw.Write([]byte("hello"))
+	mw.Close()
+	req := httptest.NewRequest("POST", "/files", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-Tenant-ID", "demo")
+	rec := httptest.NewRecorder()
+	a.handler.ServeHTTP(rec, req)
+	if rec.Code != 503 || len(d.files) != 0 {
+		t.Fatalf("upload during a purge: %d, files left %v", rec.Code, d.files)
+	}
+}
