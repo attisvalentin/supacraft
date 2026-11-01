@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/attisvalentin/supacraft/internal/storage"
 )
@@ -96,5 +97,46 @@ func TestRemoveTenant_PurgesTrackedRemoteFiles(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(data, p)); !os.IsNotExist(err) {
 			t.Errorf("%s survived the purge", p)
 		}
+	}
+}
+
+// hangingBucket never answers, like an FTP server that stopped responding.
+type hangingBucket struct{ release chan struct{} }
+
+func (b *hangingBucket) Put(context.Context, string, io.Reader, int64) error { return nil }
+func (b *hangingBucket) Get(context.Context, string) (io.ReadCloser, error)  { return nil, nil }
+func (b *hangingBucket) Exists(context.Context, string) (bool, error)        { <-b.release; return true, nil }
+func (b *hangingBucket) Delete(context.Context, string) error                { <-b.release; return nil }
+
+func TestRemoveTenant_PurgeTimesOut(t *testing.T) {
+	ctx := context.Background()
+	data := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(data, "tenants"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `{"db_name": "shop", "enabled": true, "api_settings": {"storage": {"driver": "ftp", "config": {"host": "h"}}}}`
+	if err := os.WriteFile(filepath.Join(data, "tenants", "shop.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(data, "shop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.TrackUpload(ctx, db, "a.png", storage.Destination("ftp", map[string]any{"host": "h"})); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	bucket := &hangingBucket{release: make(chan struct{})}
+	defer close(bucket.release)
+	newStorageDriver = func(string, map[string]any, string) (storage.StorageDriver, error) { return bucket, nil }
+	purgeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { newStorageDriver = storage.NewDriver; purgeTimeout = 10 * time.Minute })
+
+	if _, err := RemoveTenant(ctx, data, "", "shop", true); err == nil {
+		t.Fatal("purge against a hanging server succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(data, "shop.db")); err != nil {
+		t.Fatal("database deleted although the remote files weren't")
 	}
 }

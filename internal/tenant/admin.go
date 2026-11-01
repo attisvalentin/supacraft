@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/attisvalentin/supacraft/internal/secrets"
 	"github.com/attisvalentin/supacraft/internal/storage"
@@ -205,13 +206,34 @@ func purgeRemoteFiles(ctx context.Context, dbPath string, st StorageConfig, res 
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, purgeTimeout)
+	defer cancel()
 	for _, p := range mine {
-		if err := driver.Delete(ctx, p); err != nil {
-			if exists, xerr := driver.Exists(ctx, p); xerr != nil || exists {
+		if err := bounded(ctx, func() error { return driver.Delete(ctx, p) }); err != nil {
+			var exists bool
+			xerr := bounded(ctx, func() (e error) { exists, e = driver.Exists(ctx, p); return })
+			if xerr != nil || exists {
 				return fmt.Errorf("%s: %w", p, err)
 			}
 		}
 		res.FilesDeleted++
 	}
 	return nil
+}
+
+// purgeTimeout bounds the remote deletes of one purge; a purge that runs
+// out of time fails and can be retried.
+var purgeTimeout = 10 * time.Minute
+
+// bounded runs fn until ctx ends. FTP and SFTP drivers ignore contexts, so
+// a call that hangs is abandoned in the background instead of blocking.
+func bounded(ctx context.Context, fn func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

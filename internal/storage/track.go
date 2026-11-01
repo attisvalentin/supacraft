@@ -58,7 +58,7 @@ func Destination(driver string, cfg map[string]any) string {
 		if driver == "sftp" {
 			port = 22
 		}
-		loc = fmt.Sprintf("%s|%d|%s", configString(cfg, "host", ""), configInt(cfg, "port", port), configString(cfg, "root", ""))
+		loc = fmt.Sprintf("%s|%d|%s|%s", configString(cfg, "host", ""), configInt(cfg, "port", port), configString(cfg, "root", ""), configString(cfg, "username", ""))
 	}
 	sum := sha256.Sum256([]byte(driver + "|" + loc))
 	return driver + ":" + hex.EncodeToString(sum[:8])
