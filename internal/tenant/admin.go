@@ -2,6 +2,7 @@ package tenant
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/attisvalentin/supacraft/internal/secrets"
+	"github.com/attisvalentin/supacraft/internal/storage"
 )
 
 // A tenant is disabled by a marker file next to its config, not by editing
@@ -82,40 +84,92 @@ func ListTenants(ctx context.Context, dataDir string) ([]TenantInfo, error) {
 	return out, nil
 }
 
+// RemoveResult reports what RemoveTenant deleted.
+type RemoveResult struct {
+	ID     string `json:"id"`
+	Purged bool   `json:"purged"`
+	// FilesDriver is the tenant's remote storage driver, if any ("" for
+	// local disk); FilesDeleted counts the uploads deleted there.
+	FilesDriver  string `json:"files_driver,omitempty"`
+	FilesDeleted int    `json:"files_deleted"`
+}
+
 // RemoveTenant stops serving a tenant by deleting its config. With purge it
-// also deletes the tenant's database and local files under storagePath;
-// without it the data stays and a later apply brings the tenant back. The
-// config goes last, so a failed purge can be retried. remoteFiles reports
-// a non-local storage driver, whose files RemoveTenant cannot delete.
-func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bool) (remoteFiles string, err error) {
+// also deletes the tenant's uploads (local, or the ones recorded in
+// storage.FilesTable on a remote driver), database and secrets; without it
+// the data stays and a later apply brings the tenant back. During a purge
+// the tenant is disabled and its config goes last, so a failed purge serves
+// nothing and can be retried.
+func RemoveTenant(ctx context.Context, dataDir, storagePath, id string, purge bool) (*RemoveResult, error) {
 	store := &FileStore{dir: filepath.Join(dataDir, "tenants")}
 	cfg, err := store.GetTenantConfig(ctx, id)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	res := &RemoveResult{ID: id, Purged: purge}
 	if purge {
+		if err := os.WriteFile(disabledPath(dataDir, id), nil, 0o600); err != nil {
+			return nil, fmt.Errorf("disable tenant: %w", err)
+		}
+		base := filepath.Join(dataDir, cfg.DBName)
+		if st := cfg.APISettings.Storage; st != nil && st.Driver != "" && st.Driver != "local" {
+			res.FilesDriver = st.Driver
+			if res.FilesDeleted, err = purgeRemoteFiles(ctx, base+".db", st.Driver, st.Config); err != nil {
+				return nil, fmt.Errorf("delete files in %s storage (nothing else was deleted, retry): %w", st.Driver, err)
+			}
+		}
 		for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
-			if err := os.Remove(filepath.Join(dataDir, cfg.DBName+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return "", fmt.Errorf("delete database: %w", err)
+			if err := os.Remove(base + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("delete database: %w", err)
 			}
 		}
 		if storagePath != "" {
 			if err := os.RemoveAll(filepath.Join(storagePath, id)); err != nil {
-				return "", fmt.Errorf("delete files: %w", err)
+				return nil, fmt.Errorf("delete files: %w", err)
 			}
 		}
 		if err := secrets.New(dataDir).Remove(id); err != nil {
-			return "", fmt.Errorf("delete secrets: %w", err)
+			return nil, fmt.Errorf("delete secrets: %w", err)
 		}
-		if st := cfg.APISettings.Storage; st != nil && st.Driver != "" && st.Driver != "local" {
-			remoteFiles = st.Driver
-		}
-	}
-	if err := os.Remove(disabledPath(dataDir, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("remove disabled marker: %w", err)
 	}
 	if err := os.Remove(store.tenantPath(id)); err != nil {
-		return "", err
+		return nil, err
 	}
-	return remoteFiles, nil
+	if err := os.Remove(disabledPath(dataDir, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("remove disabled marker: %w", err)
+	}
+	return res, nil
+}
+
+// newStorageDriver is replaced in tests.
+var newStorageDriver = storage.NewDriver
+
+// purgeRemoteFiles deletes the uploads recorded in the tenant database from
+// its remote storage. Files already gone count as deleted, so a retry after
+// a partial failure finishes the job.
+func purgeRemoteFiles(ctx context.Context, dbPath, driverName string, driverCfg map[string]any) (int, error) {
+	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	paths, err := storage.TrackedUploads(ctx, db)
+	if err != nil || len(paths) == 0 {
+		return 0, err
+	}
+	driver, err := newStorageDriver(driverName, driverCfg, "")
+	if err != nil {
+		return 0, err
+	}
+	for i, p := range paths {
+		if err := driver.Delete(ctx, p); err != nil {
+			if exists, xerr := driver.Exists(ctx, p); xerr != nil || exists {
+				return i, fmt.Errorf("%s: %w", p, err)
+			}
+		}
+	}
+	return len(paths), nil
 }

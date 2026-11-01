@@ -68,12 +68,17 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 		r.Post("/admin/studio/tenants/{tenantID}/query", HandleStudioQuery(store, pool))
 	})
 
-	// Central-server management (secrets, deploys) — HMAC-signed with
+	// Central-server management (deploys, secrets, tenants, error logs) — HMAC-signed with
 	// SUPACRAFT_ADMIN_SECRET; disabled unless it is set.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AdminAuth(serverCfg.AdminSecret))
 
+		r.Get("/admin/tenants", HandleTenantsList(serverCfg))
 		r.Put("/admin/tenants/{tenantID}", HandleDeploy(serverCfg, store))
+		r.Delete("/admin/tenants/{tenantID}", HandleTenantRemove(serverCfg, store, pool))
+		r.Post("/admin/tenants/{tenantID}/disable", HandleTenantSetDisabled(serverCfg, store, true))
+		r.Post("/admin/tenants/{tenantID}/enable", HandleTenantSetDisabled(serverCfg, store, false))
+		r.Get("/admin/tenants/{tenantID}/errors", HandleTenantErrors(serverCfg, errLog))
 		r.Get("/admin/tenants/{tenantID}/secrets", HandleSecretsList(serverCfg))
 		r.Put("/admin/tenants/{tenantID}/secrets/{name}", HandleSecretSet(serverCfg, store))
 		r.Delete("/admin/tenants/{tenantID}/secrets/{name}", HandleSecretUnset(serverCfg, store))

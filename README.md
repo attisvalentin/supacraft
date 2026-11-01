@@ -231,7 +231,7 @@ The `users` table and the auth endpoints come from `"auth_enabled": true`; you d
 | `supacraft mcp` | MCP server for AI agents on stdio; also serves the API |
 | `supacraft validate` | Check `supacraft.json` and print errors and warnings |
 | `supacraft apply` | Migrate the database and write the compiled config (`--data-dir` = into a central server) |
-| `supacraft tenants` | `list`, `disable`, `enable`, `remove [--purge]` tenants of a central server |
+| `supacraft tenants` | `list`, `disable`, `enable`, `remove [--purge]` tenants of a central server and show their `errors`, from your machine (`--server`) or on the server (`--data-dir`) |
 | `supacraft deploy` | Send `supacraft.json` to a central server: validate, migrate, go live (`--dry-run` first). Values from `.env` are never sent; write secrets as `${NAME}` references, since literal values in `supacraft.json` are sent |
 | `supacraft secrets` | `set`, `unset`, `list` a tenant's secrets on a central server (values never leave the server) |
 | `supacraft studio` | Open a read-only data browser |
@@ -255,7 +255,8 @@ from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a
 | `validate`, `apply` | Check, or apply hand-made edits |
 | `call_endpoint` | Send a real HTTP request to the running API |
 | `query_db` | Read-only SQL against the database (the JWT key and password hashes are not readable) |
-| `get_logs` | Recent API errors |
+| `get_logs` | Recent server errors (5xx) of the local API |
+| `get_server_errors`, `list_tenants` | Errors of this project on the central server (secret values masked), and every API on it |
 | `check_secrets` | Which `${NAME}` secrets are missing (names only), and the command the user runs to set them |
 
 The full `supacraft.json` reference is [internal/docs/reference.md](internal/docs/reference.md).
@@ -332,11 +333,22 @@ curl -H "X-Tenant-ID: shop" https://api.example.com/fn/products
 └── errors.db
 ```
 
-The tenant id comes from the project name (`"name": "My Shop"` → `my_shop`). Manage tenants with
-`supacraft tenants list | disable <id> | enable <id> | remove <id> [--purge]`. A disabled tenant
-answers `503` and its cron jobs pause until you enable it again; applying it again doesn't re-enable
-it. `remove` keeps the database unless you add `--purge`, which deletes the database and locally stored uploads (files in S3 or another remote storage driver have to be removed there). Pass `--default-tenant <id>` to
-`serve` if requests without the header should go to one tenant.
+The tenant id comes from the project name (`"name": "My Shop"` → `my_shop`). Manage tenants from
+your machine (or on the server with `--data-dir` instead of `--server`):
+
+```bash
+supacraft tenants list --server https://api.example.com
+supacraft tenants errors shop        # recent 5xx errors with the internal message, secrets masked
+supacraft tenants disable shop       # 503 for every request, cron jobs pause; enable brings it back
+supacraft tenants remove shop        # stop serving it; the database stays
+supacraft tenants remove shop --purge
+```
+
+Deploying a disabled tenant doesn't re-enable it. `--purge` deletes the database, secrets and
+uploads, including those in S3 or another remote storage driver: SupaCraft records every upload
+and deletes exactly those, never anything else in the bucket. If a remote file can't be deleted, nothing else is, the tenant stays disabled
+and you can run it again. Pass `--default-tenant <id>` to `serve` if requests without the header
+should go to one tenant.
 
 Back up the whole data directory, for example with [Litestream](https://litestream.io).
 

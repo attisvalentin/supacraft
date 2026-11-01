@@ -2,9 +2,11 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -117,10 +119,22 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			return
 		}
 
+		// Record the upload first, so purging the tenant can find the file.
+		dbPool, err := pool.GetPool(r.Context(), cfg)
+		if err != nil {
+			writeErrorJSON(w, r, http.StatusInternalServerError, "database unavailable")
+			return
+		}
+		if err := storage.TrackUpload(r.Context(), dbPool, storagePath); err != nil {
+			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("record upload: %v", err))
+			return
+		}
+
 		// Reconstruct reader: 512-byte buffer + rest of file
 		combinedReader := io.MultiReader(bytes.NewReader(buf), file)
 
 		if err := driver.Put(r.Context(), storagePath, combinedReader, header.Size); err != nil {
+			_ = storage.UntrackUpload(context.WithoutCancel(r.Context()), dbPool, storagePath)
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("file upload failed: %v", err))
 			return
 		}
@@ -253,6 +267,11 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 		if err := driver.Delete(r.Context(), filePath); err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("file delete failed: %v", err))
 			return
+		}
+		if dbPool, err := pool.GetPool(r.Context(), cfg); err == nil {
+			if err := storage.UntrackUpload(r.Context(), dbPool, filePath); err != nil {
+				slog.Warn("forget deleted upload", "tenant", tenantID, "error", err)
+			}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

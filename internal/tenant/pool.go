@@ -155,6 +155,15 @@ func (pm *PoolManager) Retain(keep map[string]bool) {
 	})
 }
 
+// Drop closes the pool of one database, e.g. before its file is deleted.
+func (pm *PoolManager) Drop(dbName string) {
+	if val, ok := pm.pools.LoadAndDelete(dbName); ok {
+		if err := val.(*poolEntry).db.Close(); err != nil {
+			slog.Warn("tenant pool: close failed", "db", dbName, "err", err)
+		}
+	}
+}
+
 // StartEvictor closes pools that have been idle longer than 30 minutes.
 func (pm *PoolManager) StartEvictor(ctx context.Context) {
 	go func() {

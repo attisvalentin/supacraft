@@ -357,3 +357,13 @@ func TestApplyTo_SharedDirKeepsOtherTenants(t *testing.T) {
 		t.Error("stale tenant not pruned from the project's own directory")
 	}
 }
+
+func TestValidate_ReservedTablePrefix(t *testing.T) {
+	p := load(t, `{"name": "x", "schema": {"tables": [{"name": "_SupaCraft_files", "columns": [{"name": "path", "type": "varchar"}]}]}}`)
+	for _, i := range p.Validate() {
+		if i.Severity == "error" && i.Path == "schema.tables[0].name" {
+			return
+		}
+	}
+	t.Fatal("reserved table name accepted")
+}
