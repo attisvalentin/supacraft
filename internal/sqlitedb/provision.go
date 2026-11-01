@@ -100,6 +100,16 @@ func (p *Provisioner) RunTenantMigrations(ctx context.Context, dbName string) er
 			created_at  TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
+		// One-time tokens of password reset and email verification links;
+		// only their SHA-256 is stored.
+		`CREATE TABLE IF NOT EXISTS "_supacraft_auth_tokens" (
+			"token_hash" TEXT PRIMARY KEY,
+			"user_id"    TEXT NOT NULL,
+			"purpose"    TEXT NOT NULL,
+			"expires_at" INTEGER NOT NULL,
+			"created_at" INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS "_supacraft_auth_tokens_user" ON "_supacraft_auth_tokens" ("user_id", "purpose")`,
 	}
 	for _, sqlText := range migrations {
 		if _, err := db.ExecContext(ctx, sqlText); err != nil {

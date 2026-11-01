@@ -45,7 +45,7 @@ want a real backend in minutes rather than days and you don't want to run anyone
 | | |
 |---|---|
 | 🗄️ **Database** | SQLite tables generated from your schema, migrated automatically when you add tables or columns |
-| 🔐 **Auth** | `/auth/register`, `/auth/login`, `/auth/refresh` with JWT; per-endpoint auth and row-level policies |
+| 🔐 **Auth** | Register, login and refresh with JWT, password reset and email verification by email; per-endpoint auth and row-level policies |
 | ⚡ **Custom endpoints** | `/fn/posts/{id}` routes built from steps: queries with joins and aggregates, transactions, input validation, if/else, loops, try/catch, math, HTTP calls, emails |
 | ⏰ **Cron jobs** | The same steps on a schedule (`0 3 * * *`) |
 | 📁 **File storage** | Upload/download endpoints backed by local disk, S3/R2/MinIO, GCS, Azure, FTP or SFTP |

@@ -215,7 +215,7 @@ func (s *server) register(srv *mcp.Server) {
 			})
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "set_auth", Description: "Turn built-in user auth (/auth/register, /auth/login, /auth/refresh and the users table) on or off."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_auth", Description: "Turn built-in user auth (/auth/register, /auth/login, /auth/refresh and the users table) on or off. Password reset and email verification are configured with update_api_settings (auth.password_reset, auth.email_verification; see the reference)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Enabled bool `json:"enabled"`
 		}) (*mcp.CallToolResult, any, error) {

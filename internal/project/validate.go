@@ -137,6 +137,7 @@ func (p *Project) Validate() []Issue {
 		v.templates[name] = true
 	}
 	v.apiSettings(settings)
+	v.authEmails(asMap(settings["auth"]), asMap(asMap(settings["email"])["smtp"]), p.AuthEnabled())
 	v.functionsSection(asMap(raw["functions"]))
 	v.cronjobs(asMap(raw["cronjobs"]))
 
@@ -276,6 +277,45 @@ func (v *validator) apiSettings(s map[string]any) {
 		u, err := url.Parse(origin)
 		if err != nil || u.Scheme == "" || u.Host == "" || (u.Path != "" && u.Path != "/") {
 			v.errorf("api_settings.cors.allowed_origin", "must be \"*\" or scheme://host[:port] with no path")
+		}
+	}
+}
+
+// authEmails checks api_settings.auth.password_reset and
+// .email_verification: each mails a link built from url with a template.
+func (v *validator) authEmails(auth, smtp map[string]any, authEnabled bool) {
+	for _, key := range []string{"password_reset", "email_verification"} {
+		raw, ok := auth[key]
+		if !ok || raw == nil {
+			continue
+		}
+		path := "api_settings.auth." + key
+		flow, ok := raw.(map[string]any)
+		if !ok {
+			v.errorf(path, "must be an object")
+			continue
+		}
+		if !authEnabled {
+			v.errorf(path, "needs auth_enabled: true")
+		}
+		if smtp["enabled"] != true {
+			v.errorf(path, "needs api_settings.email.smtp to be enabled to send its emails")
+		}
+		if id, _ := flow["template"].(string); !v.templates[id] {
+			v.errorf(path+".template", "unknown email template %q (define it in api_settings.email.templates; it gets {{.link}}, {{.token}}, {{.email}}, {{.expires_in_minutes}})", id)
+		}
+		link, _ := flow["url"].(string)
+		u, err := url.Parse(strings.ReplaceAll(link, "{token}", "t"))
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || !strings.Contains(link, "{token}") {
+			v.errorf(path+".url", "must be an http(s) URL of your app containing {token}, e.g. https://app.example.com/reset?token={token}")
+		} else if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
+			v.warnf(path+".url", "plain http exposes the one-time token; use https")
+		}
+		if ttl, ok := flow["token_ttl"].(float64); ok && (ttl < 60 || ttl > 30*86400) {
+			v.errorf(path+".token_ttl", "must be between 60 and 2592000 seconds")
+		}
+		if key == "password_reset" && flow["required"] != nil {
+			v.errorf(path+".required", "only applies to email_verification")
 		}
 	}
 }

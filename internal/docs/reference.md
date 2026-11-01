@@ -17,7 +17,7 @@ The authoritative reference for `supacraft.json`. Tables, columns, functions, cr
 }
 ```
 
-`name` is required; every other section is optional. `auth_enabled` turns on the built-in `users` table and `/auth/*` endpoints — the six auth columns (`id`, `email`, `password`, `is_active`, `created_at`, `updated_at`) are added automatically; declare a `users` table only to add extra columns.
+`name` is required; every other section is optional. `auth_enabled` turns on the built-in `users` table and `/auth/*` endpoints — the built-in auth columns (`id`, `email`, `password`, `is_active`, `email_verified`, `session_version`, `created_at`, `updated_at`) are added automatically; declare a `users` table only to add extra columns.
 
 The database is SQLite. Schema changes are **additive**: new tables and new columns are created, but drops, renames and type changes are not applied to existing data.
 
@@ -747,7 +747,7 @@ Available when `auth_enabled: true` on the tenant and the specific endpoint is e
 
 - Passwords need at least `api_settings.auth.password_min_length` characters (default 8, allowed 1–72) and at most 72 bytes.
 - Register accepts `email`, `password` and any **creatable** column you added to `users` (e.g. a display name). Columns that grant access (`role`, `is_admin`, `plan`, …) must be `"creatable": false, "updatable": false`, otherwise anyone can register as an admin; validation warns about such columns.
-- The built-in columns (`id`, `email`, `password`, `is_active`, `created_at`, `updated_at`) keep their own settings even if you declare them in `users`. `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens. Access tokens already issued stay valid until they expire (`api_settings.auth.access_token_ttl`, seconds, default 86400).
+- The built-in columns (`id`, `email`, `password`, `is_active`, `email_verified`, `session_version`, `created_at`, `updated_at`) keep their own settings even if you declare them in `users`. `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens, and their tokens stop working at once. `email_verified` is set by `/auth/verify-email` (and by a password reset); `session_version` is internal (a password reset bumps it, which ends every session issued before).
 
 #### POST /auth/register
 ```bash
@@ -771,6 +771,42 @@ curl -X POST http://localhost:8080/auth/refresh \
   -H "Content-Type: application/json" \
   -d '{"refresh_token": "eyJ..."}'
 ```
+
+#### Password reset and email verification
+
+Both mail a one-time link and need `api_settings.email.smtp` and a template in `api_settings.email.templates`. Configure them under `api_settings.auth`:
+
+```json
+{
+  "api_settings": {
+    "email": {
+      "smtp": { "enabled": true, "...": "..." },
+      "templates": {
+        "reset_password": { "subject": "Reset your password", "text": "Open {{.link}} (valid for {{.expires_in_minutes}} minutes)." },
+        "verify_email": { "subject": "Confirm {{.email}}", "html": "<a href=\"{{.link}}\">Confirm your email</a>" }
+      }
+    },
+    "auth": {
+      "password_reset": { "template": "reset_password", "url": "https://app.example.com/reset?token={token}", "token_ttl": 3600 },
+      "email_verification": { "template": "verify_email", "url": "https://app.example.com/verify?token={token}", "token_ttl": 86400, "required": true }
+    }
+  }
+}
+```
+
+- `url` is the page of **your app** that receives the token (`{token}` is replaced); that page posts it to the endpoints below. Templates get `{{.link}}`, `{{.token}}`, `{{.email}}` and `{{.expires_in_minutes}}`.
+- `token_ttl`: seconds, 60–2592000; defaults 3600 (reset) and 86400 (verification). Tokens work once; only the newest one of each kind works, and at most one email per kind and user is sent per minute.
+- `email_verification.required: true` refuses login (`403 email not verified`) until the email is verified. Users who registered before you turned it on are unverified too.
+- Emails are sent in the background; delivery errors appear in the error log (`get_logs`, `supacraft tenants errors`), never in the response.
+
+| Endpoint | Body | Response |
+|---|---|---|
+| `POST /auth/forgot-password` | `{"email"}` | always `202`, whether or not the email has an account |
+| `POST /auth/reset-password` | `{"token", "password"}` | `200`; sets the password, marks the email verified and ends all earlier sessions. `400` for an invalid, used or expired token |
+| `POST /auth/verify-email` | `{"token"}` | `200`, or `400` for an invalid, used or expired token |
+| `POST /auth/resend-verification` | `{"email"}` | always `202`; mails a new link to an unverified account |
+
+A new verification link is also mailed on `/auth/register` when `email_verification` is set.
 
 ---
 

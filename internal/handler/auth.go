@@ -1,12 +1,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/attisvalentin/supacraft/internal/middleware"
 	"github.com/attisvalentin/supacraft/internal/query"
@@ -65,18 +65,9 @@ func HandleRegister(pool *tenant.PoolManager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password is required"})
 			return
 		}
-		password, ok := passwordVal.(string)
-		if !ok || password == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be a non-empty string"})
-			return
-		}
-		if minLen := cfg.APISettings.Auth.MinPasswordLength(); utf8.RuneCountInString(password) < minLen {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("password must be at least %d characters", minLen)})
-			return
-		}
-		// bcrypt ignores everything past 72 bytes.
-		if len(password) > tenant.MaxPasswordBytes {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("password must be at most %d bytes", tenant.MaxPasswordBytes)})
+		password, _ := passwordVal.(string)
+		if msg := checkPassword(cfg, password); msg != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 			return
 		}
 
@@ -131,6 +122,7 @@ func HandleRegister(pool *tenant.PoolManager) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no result returned"})
 			return
 		}
+		sendVerificationOnRegister(r, dbPool, cfg, email)
 		writeJSON(w, http.StatusCreated, map[string]any{"data": row})
 	}
 }
@@ -161,11 +153,12 @@ func HandleLogin(pool *tenant.PoolManager) http.HandlerFunc {
 		}
 
 		var userID, hashedPassword string
-		var active bool
+		var active, verified bool
+		var version int64
 		err = dbPool.QueryRow(r.Context(),
-			`SELECT "id", "password", COALESCE("is_active", 1) FROM "users" WHERE "email" = ?`,
+			`SELECT "id", "password", COALESCE("is_active", 1), COALESCE("email_verified", 0), COALESCE("session_version", 0) FROM "users" WHERE "email" = ?`,
 			req.Email,
-		).Scan(&userID, &hashedPassword, &active)
+		).Scan(&userID, &hashedPassword, &active, &verified, &version)
 		if err != nil {
 			// Spend the same bcrypt time as a real check, so response timing
 			// doesn't reveal which emails are registered.
@@ -176,6 +169,11 @@ func HandleLogin(pool *tenant.PoolManager) http.HandlerFunc {
 
 		if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil || !active {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+			return
+		}
+		// Checked after the password, so it reveals nothing to a guesser.
+		if v := cfg.APISettings.Auth.EmailVerification; v.Enabled() && v.Required && !verified {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "email not verified"})
 			return
 		}
 
@@ -194,6 +192,7 @@ func HandleLogin(pool *tenant.PoolManager) http.HandlerFunc {
 			"email": req.Email,
 			"exp":   time.Now().Add(auth.AccessTTL()).Unix(),
 			"iat":   time.Now().Unix(),
+			"ver":   version,
 		})
 
 		tokenString, err := token.SignedString([]byte(jwtSecret))
@@ -208,6 +207,7 @@ func HandleLogin(pool *tenant.PoolManager) http.HandlerFunc {
 			"type":  "refresh",
 			"exp":   time.Now().Add(auth.RefreshTTL()).Unix(),
 			"iat":   time.Now().Unix(),
+			"ver":   version,
 		})
 
 		refreshTokenString, err := refreshToken.SignedString([]byte(jwtSecret))
@@ -290,12 +290,9 @@ func HandleRefresh(pool *tenant.PoolManager) http.HandlerFunc {
 		email, _ := claims["email"].(string)
 
 		// Refresh tokens outlive account changes: re-check that the user
-		// still exists and is active before issuing new tokens.
-		var active bool
-		err = dbPool.QueryRow(r.Context(),
-			`SELECT COALESCE("is_active", 1) FROM "users" WHERE "id" = ?`, userID,
-		).Scan(&active)
-		if err != nil || !active {
+		// still exists, is active and hasn't reset the password since.
+		version, ok := sessionVersion(r.Context(), dbPool, userID)
+		if claimed, _ := claims["ver"].(float64); !ok || int64(claimed) != version {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid refresh token"})
 			return
 		}
@@ -306,6 +303,7 @@ func HandleRefresh(pool *tenant.PoolManager) http.HandlerFunc {
 			"email": email,
 			"exp":   time.Now().Add(auth.AccessTTL()).Unix(),
 			"iat":   time.Now().Unix(),
+			"ver":   version,
 		})
 		newTokenString, err := newToken.SignedString([]byte(jwtSecret))
 		if err != nil {
@@ -319,6 +317,7 @@ func HandleRefresh(pool *tenant.PoolManager) http.HandlerFunc {
 			"type":  "refresh",
 			"exp":   time.Now().Add(auth.RefreshTTL()).Unix(),
 			"iat":   time.Now().Unix(),
+			"ver":   version,
 		})
 		newRefreshTokenString, err := newRefreshToken.SignedString([]byte(jwtSecret))
 		if err != nil {
@@ -384,9 +383,34 @@ func validateJWT(r *http.Request, cfg *tenant.TenantConfig, pool *tenant.PoolMan
 
 	userID, _ := claims["sub"].(string)
 	email, _ := claims["email"].(string)
+	if !sessionValid(r.Context(), dbPool, userID, claims["ver"]) {
+		return nil, fmt.Errorf("session ended")
+	}
 
 	return &tenant.AuthClaims{
 		UserID: userID,
 		Email:  email,
 	}, nil
+}
+
+// sessionVersion returns the user's session version if the user exists
+// and is active; ok is false otherwise.
+func sessionVersion(ctx context.Context, db *tenant.DB, userID string) (version int64, ok bool) {
+	if userID == "" {
+		return 0, false
+	}
+	var active bool
+	err := db.QueryRow(ctx,
+		`SELECT COALESCE("is_active", 1), COALESCE("session_version", 0) FROM "users" WHERE "id" = ?`, userID,
+	).Scan(&active, &version)
+	return version, err == nil && active
+}
+
+// sessionValid reports whether a token for userID carrying ver (its "ver"
+// claim; absent counts as 0) is still good: the user exists, is active,
+// and hasn't reset the password since it was issued.
+func sessionValid(ctx context.Context, db *tenant.DB, userID string, ver any) bool {
+	current, ok := sessionVersion(ctx, db, userID)
+	claimed, _ := ver.(float64)
+	return ok && int64(claimed) == current
 }

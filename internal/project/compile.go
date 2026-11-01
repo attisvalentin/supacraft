@@ -21,6 +21,12 @@ var authUserColumns = []map[string]any{
 	{"name": "password", "type": "varchar", "readable": false, "creatable": true, "updatable": true},
 	// Clients must not activate themselves; flip it from a function or cron.
 	{"name": "is_active", "type": "boolean", "creatable": false, "updatable": false},
+	// Set by /auth/verify-email (and a password reset, which proves the
+	// same); NULL means not verified.
+	{"name": "email_verified", "type": "boolean", "creatable": false, "updatable": false},
+	// Bumped by a password reset; tokens carry it as "ver" and older ones
+	// are rejected.
+	{"name": "session_version", "type": "int", "readable": false, "creatable": false, "updatable": false},
 	{"name": "created_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 	{"name": "updated_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 }

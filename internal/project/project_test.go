@@ -367,3 +367,27 @@ func TestValidate_ReservedTablePrefix(t *testing.T) {
 	}
 	t.Fatal("reserved table name accepted")
 }
+
+func TestValidate_AuthEmailFlows(t *testing.T) {
+	p := load(t, `{"name": "x", "auth_enabled": true, "api_settings": {
+	  "email": {"smtp": {"enabled": true}, "templates": {"reset": {"subject": "Reset", "text": "{{.link}}"}}},
+	  "auth": {
+	    "password_reset": {"template": "reset", "url": "https://app.example.com/reset?token={token}", "token_ttl": 1800},
+	    "email_verification": {"template": "nope", "url": "https://app.example.com/verify", "token_ttl": 5}}}}`)
+	got := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+		}
+	}
+	for _, want := range []string{"api_settings.auth.email_verification.template", "api_settings.auth.email_verification.url", "api_settings.auth.email_verification.token_ttl"} {
+		if !got[want] {
+			t.Errorf("missing error at %s (got %v)", want, got)
+		}
+	}
+	for path := range got {
+		if strings.HasPrefix(path, "api_settings.auth.password_reset") {
+			t.Errorf("valid password_reset rejected: %s", path)
+		}
+	}
+}
