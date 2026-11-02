@@ -262,8 +262,14 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 				v.errorf(path+".expect.db."+table+".count", "must be a row count")
 			}
 			if w, set := asMap(de)["where"]; set && w != nil {
-				if _, isMap := w.(map[string]any); !isMap {
+				wm, isMap := w.(map[string]any)
+				if !isMap {
 					v.errorf(path+".expect.db."+table+".where", "must be an object")
+				}
+				for col := range wm {
+					if cols, known := v.tables[table]; known && !strings.HasPrefix(col, "$") && !cols[col] {
+						v.errorf(path+".expect.db."+table+".where."+col, "unknown column %q", col)
+					}
 				}
 			}
 		}

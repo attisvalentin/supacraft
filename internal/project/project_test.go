@@ -512,14 +512,15 @@ func TestValidate_SeedAndTestShapes(t *testing.T) {
 	p := load(t, `{"name": "x", "auth_enabled": true,
 	  "seed": {"users": {"email": "a@x.co"}, "tables": []},
 	  "tests": {"t": {"call": "GET /fn/a%zz", "query": {"page": 2}, "http_mocks": {"https://x.co/": {"status": "ok"}},
-	                  "expect": {"db": {"users": {"count": 0, "where": []}}}}}}`)
+	                  "expect": {"db": {"users": {"count": 0, "where": []}}}},
+	              "u": {"call": "GET /fn/a", "expect": {"db": {"users": {"count": 0, "where": {"nope": 1, "email": "a@x.co"}}}}}}}`)
 	got := map[string]bool{}
 	for _, i := range p.Validate() {
 		if i.Severity == "error" {
 			got[i.Path] = true
 		}
 	}
-	for _, want := range []string{"seed.users", "seed.tables", "tests.t.call", "tests.t.query.page", "tests.t.http_mocks.https://x.co/.status", "tests.t.expect.db.users.where"} {
+	for _, want := range []string{"seed.users", "seed.tables", "tests.t.call", "tests.t.query.page", "tests.t.http_mocks.https://x.co/.status", "tests.t.expect.db.users.where", "tests.u.expect.db.users.where.nope"} {
 		if !got[want] {
 			t.Errorf("missing error at %s (got %v)", want, got)
 		}
