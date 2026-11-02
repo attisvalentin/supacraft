@@ -367,6 +367,9 @@ func (v *validator) roles(settings, fns map[string]any, authEnabled bool) {
 	// check validates one "roles" list; authKey names the sibling flag that
 	// must not be explicitly false, since roles imply sign-in.
 	check := func(path string, owner map[string]any, authKey string) {
+		if owner[authKey] == true && !authEnabled {
+			v.errorf(path+"."+authKey, "needs auth_enabled: true (without it no request has a token)")
+		}
 		raw, ok := owner["roles"]
 		if !ok || raw == nil {
 			return

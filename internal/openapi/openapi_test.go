@@ -160,7 +160,10 @@ func TestColumnSchema(t *testing.T) {
 		{tenant.SchemaColumn{Type: "jsonb"}, `{}`},
 	}
 	for _, c := range cases {
-		got, _ := json.Marshal(columnSchema(&c.col))
+		got, err := json.Marshal(columnSchema(&c.col))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(got) != c.want {
 			t.Errorf("%s: %s, want %s", c.col.Type, got, c.want)
 		}

@@ -25,6 +25,7 @@ type doc struct {
 	opts    Options
 	paths   map[string]map[string]any
 	schemas map[string]any
+	bearer  bool // an operation requires a token
 }
 
 // Build returns the OpenAPI document of cfg, ready to marshal as JSON.
@@ -58,7 +59,7 @@ func Build(cfg *tenant.TenantConfig, opts Options) map[string]any {
 		"paths":      d.paths,
 		"components": map[string]any{"schemas": d.schemas},
 	}
-	if cfg.AuthEnabled {
+	if d.bearer {
 		out["components"].(map[string]any)["securitySchemes"] = map[string]any{
 			"bearerAuth": map[string]any{"type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "The token from POST /auth/login."},
 		}
@@ -101,11 +102,12 @@ func access(needAuth bool, roles []string) (security []any, note string) {
 	return []any{map[string]any{"bearerAuth": []any{}}}, note
 }
 
-func withAccess(operation map[string]any, needAuth bool, roles []string) map[string]any {
+func (d *doc) withAccess(operation map[string]any, needAuth bool, roles []string) map[string]any {
 	security, note := access(needAuth, roles)
 	operation["security"] = security
 	responses := operation["responses"].(map[string]any)
 	if note != "" {
+		d.bearer = true
 		desc, _ := operation["description"].(string)
 		operation["description"] = strings.TrimSpace(desc + " " + note)
 		responses["401"] = errorResponse("No valid token.")
@@ -222,7 +224,9 @@ func (d *doc) crud() {
 		for _, n := range names {
 			d.schemaRef(d.table(n), "")
 		}
-		return oneOfRefs(names)
+		// anyOf, not oneOf: row schemas are open objects, so a row can
+		// match several tables' schemas.
+		return refs("anyOf", names)
 	}
 	var tables []string
 	for name := range d.cfg.APISettings.Tables {
@@ -309,7 +313,7 @@ func (d *doc) crud() {
 		if len(requests) == 0 {
 			continue
 		}
-		body := oneOfRefs(requests)
+		body := refs("oneOf", requests)
 		body["discriminator"] = map[string]any{"propertyName": "table_id", "mapping": mapping}
 
 		var response map[string]any
@@ -345,6 +349,7 @@ func (d *doc) crud() {
 			},
 		}
 		if anyAuth {
+			d.bearer = true
 			// Access differs per table; the token is optional at the
 			// operation level and each request schema says when it's needed.
 			operation["security"] = []any{map[string]any{}, map[string]any{"bearerAuth": []any{}}}
@@ -454,7 +459,7 @@ func (d *doc) files() {
 				"400": errorResponse("Missing, too large or disallowed file."),
 			},
 		}
-		d.op("POST", "/files", withAccess(upload, ep.Upload.AuthRequired(), ep.Upload.Roles))
+		d.op("POST", "/files", d.withAccess(upload, ep.Upload.AuthRequired(), ep.Upload.Roles))
 	}
 	if ep.Download.IsEnabled() {
 		download := map[string]any{
@@ -464,7 +469,7 @@ func (d *doc) files() {
 				"404": errorResponse("File not found."),
 			},
 		}
-		d.op("GET", "/files/{path}", withAccess(download, ep.Download.AuthRequired(), ep.Download.Roles))
+		d.op("GET", "/files/{path}", d.withAccess(download, ep.Download.AuthRequired(), ep.Download.Roles))
 	}
 	if ep.Delete.IsEnabled() {
 		del := map[string]any{
@@ -474,7 +479,7 @@ func (d *doc) files() {
 				"404": errorResponse("File not found."),
 			},
 		}
-		d.op("DELETE", "/files/{path}", withAccess(del, ep.Delete.AuthRequired(), ep.Delete.Roles))
+		d.op("DELETE", "/files/{path}", d.withAccess(del, ep.Delete.AuthRequired(), ep.Delete.Roles))
 	}
 }
 
@@ -539,7 +544,7 @@ func (d *doc) functions() {
 		if len(params) > 0 {
 			operation["parameters"] = params
 		}
-		d.op(method, fn.Route.Path, withAccess(operation, fn.Route.NeedsAuth(), fn.Route.Roles))
+		d.op(method, fn.Route.Path, d.withAccess(operation, fn.Route.NeedsAuth(), fn.Route.Roles))
 	}
 }
 
@@ -596,15 +601,16 @@ func object(props map[string]any, required ...string) map[string]any {
 
 func ref(name string) map[string]any { return map[string]any{"$ref": "#/components/schemas/" + name} }
 
-func oneOfRefs(names []string) map[string]any {
+// refs combines references with oneOf or anyOf; one name is a plain ref.
+func refs(combinator string, names []string) map[string]any {
 	if len(names) == 1 {
 		return ref(names[0])
 	}
-	refs := make([]any, len(names))
+	list := make([]any, len(names))
 	for i, n := range names {
-		refs[i] = ref(n)
+		list[i] = ref(n)
 	}
-	return map[string]any{"oneOf": refs}
+	return map[string]any{combinator: list}
 }
 
 func jsonBody(schema map[string]any) map[string]any {

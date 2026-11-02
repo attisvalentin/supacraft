@@ -439,4 +439,19 @@ func TestValidate_Roles(t *testing.T) {
 	if got["api_settings.auth.roles"] == 0 {
 		t.Errorf("roles without auth_enabled accepted: %v", got)
 	}
+
+	// So do auth flags: without auth_enabled no request carries a token.
+	p = load(t, `{"name": "x",
+	  "schema": {"tables": [{"name": "posts", "columns": [{"name": "id", "type": "uuid", "primary": true}]}]},
+	  "api_settings": {"tables": {"posts": {"query": {"enabled": true, "auth": true}}}},
+	  "functions": {"f": {"route": {"path": "/fn/f", "method": "GET", "auth_required": true}, "steps": [{"type": "response", "data": {}}]}}}`)
+	got = map[string]int{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path]++
+		}
+	}
+	if got["api_settings.tables.posts.query.auth"] == 0 || got["functions.f.route.auth_required"] == 0 {
+		t.Errorf("auth flags without auth_enabled accepted: %v", got)
+	}
 }

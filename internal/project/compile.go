@@ -240,5 +240,6 @@ func (p *Project) TenantConfig() (*tenant.TenantConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config does not match the server's types: %w", err)
 	}
+	cfg.UpdatedAt = "" // compile stamps the time; keep the export reproducible
 	return &cfg, nil
 }
