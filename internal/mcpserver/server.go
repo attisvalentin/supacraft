@@ -21,6 +21,7 @@ import (
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/openapi"
 	"github.com/attisvalentin/supacraft/internal/project"
+	"github.com/attisvalentin/supacraft/internal/testrun"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	_ "modernc.org/sqlite"
@@ -35,6 +36,8 @@ Workflow:
    Valid writes are saved, the database is migrated (additive: new tables/columns) and the running API reloads.
 3. Test with call_endpoint (e.g. GET /fn/posts) and inspect data with query_db. get_logs shows recent API errors.
    get_openapi returns the API as OpenAPI 3.1, e.g. to write a frontend against it.
+4. Prove it works: add seed data (set_seed) and tests (set_test) for what you built, then run_tests. Tests run on
+   a fresh seeded database with no outside effects; fix the function or the test until they pass.
 
 Rules: identify tables, functions, cronjobs and email templates by name, never by UUID. Prefer pipeline functions
 (/fn/...) over the raw CRUD endpoints.
@@ -93,9 +96,9 @@ func (s *server) register(srv *mcp.Server) {
 			return text(docs.Reference), nil, nil
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_config", Description: "Read supacraft.json. Optionally only one section: schema, api_settings, functions or cronjobs."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_config", Description: "Read supacraft.json. Optionally only one section: schema, api_settings, functions, cronjobs, seed or tests."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
-			Section string `json:"section,omitempty" jsonschema:"schema | api_settings | functions | cronjobs; omit for everything"`
+			Section string `json:"section,omitempty" jsonschema:"schema | api_settings | functions | cronjobs | seed | tests; omit for everything"`
 		}) (*mcp.CallToolResult, any, error) {
 			p, err := project.Load(s.opts.Dir)
 			if err != nil {
@@ -202,6 +205,67 @@ func (s *server) register(srv *mcp.Server) {
 			Cronjob map[string]any `json:"cronjob"`
 		}) (*mcp.CallToolResult, any, error) {
 			return s.setEntry(ctx, "cronjobs", in.Name, in.Cronjob)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_seed", Description: "Replace the seed section: development data for the local database and every test run, never deployed. {users:[{email, role?, password? (\"${NAME}\" from .env; random when omitted), <users column>?}], tables:{<table>:[{<column>: value}]}}. Rows without an id get a stable one. Load it with the seed tool."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Seed map[string]any `json:"seed"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.mutate(ctx, func(p *project.Project) error {
+				if len(in.Seed) == 0 {
+					delete(p.Raw, "seed")
+				} else {
+					p.Raw["seed"] = in.Seed
+				}
+				return nil
+			})
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_test", Description: "Create, replace or (test: null) delete a test by name: {call: \"METHOD /path\", as?: <seed user email>, body?, query?, http_mocks?: {<URL prefix>: {status?, body}}, expect: {status?, body? (fields that must match), emails?: <count>, db?: {<table>: {where?, count}}}}. Run with run_tests."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Name string         `json:"name"`
+			Test map[string]any `json:"test"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.setEntry(ctx, "tests", in.Name, in.Test)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "run_tests", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Run the tests (all, or the named ones). Each runs on its own fresh, seeded database in a temporary directory: local data is untouched, emails are captured and http.request steps only get http_mocks. Returns pass/fail with the reasons, server errors and the response of failed tests."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Names []string `json:"names,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			p, err := project.Load(s.opts.Dir)
+			if err != nil {
+				return nil, nil, err
+			}
+			results, err := testrun.Run(ctx, p, in.Names...)
+			if err != nil {
+				return nil, nil, err
+			}
+			passed := 0
+			for _, r := range results {
+				if r.Passed {
+					passed++
+				}
+			}
+			return jsonResult(map[string]any{"passed": passed, "failed": len(results) - passed, "results": results}), nil, nil
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "seed", Description: "Add the seed data to the local database (users by email and rows by primary key that already exist are kept). It never deletes; to start over the user runs `supacraft seed --reset`."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			p, err := project.Load(s.opts.Dir)
+			if err != nil {
+				return nil, nil, err
+			}
+			res, err := testrun.SeedLocal(ctx, p, false)
+			if err != nil {
+				return nil, nil, err
+			}
+			if s.opts.Reload != nil {
+				s.opts.Reload(ctx)
+			}
+			return jsonResult(res), nil, nil
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_cronjob", Description: "Delete a cronjob by name."},

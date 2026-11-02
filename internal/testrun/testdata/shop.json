@@ -1,0 +1,50 @@
+{
+  "name": "Shop",
+  "auth_enabled": true,
+  "schema": {"tables": [
+    {"name": "products", "columns": [
+      {"name": "id", "type": "uuid", "primary": true},
+      {"name": "title", "type": "varchar"},
+      {"name": "price", "type": "decimal"}]},
+    {"name": "orders", "columns": [
+      {"name": "id", "type": "uuid", "primary": true},
+      {"name": "user_id", "type": "uuid"},
+      {"name": "product_id", "type": "uuid"},
+      {"name": "charge_id", "type": "varchar"}]}
+  ]},
+  "api_settings": {
+    "auth": {"roles": ["user", "admin"]},
+    "env": {"PAY_KEY": "${PAY_KEY}"},
+    "email": {"smtp": {"enabled": true, "provider": "smtp", "host": "smtp.example.com", "port": 587, "username": "u", "password": "${SMTP_PASSWORD}", "encryption": "tls", "from_email": "shop@example.com", "from_name": "Shop"}},
+    "tables": {"products": {"query": {"enabled": true}, "create": {"enabled": true, "roles": ["admin"]}}}
+  },
+  "functions": {
+    "checkout": {
+      "route": {"path": "/fn/checkout", "method": "POST", "auth_required": true, "input": {"product_id": {"type": "string", "required": true}}},
+      "steps": [
+        {"type": "http.request", "url": "https://pay.example.com/charge", "method": "POST", "headers": {"Authorization": "Bearer {{env.PAY_KEY}}"}, "body": {"product": "{{request.product_id}}"}, "assign": "charge"},
+        {"type": "db.insert", "table": "orders", "data": {"user_id": "{{auth.user_id}}", "product_id": "{{request.product_id}}", "charge_id": "{{charge.id}}"}, "assign": "order"},
+        {"type": "email.send", "mode": "raw", "to": ["{{auth.email}}"], "subject": "Thanks", "text": "Order {{order.id}}"},
+        {"type": "response", "status_code": 200, "data": {"ok": true, "charge": "{{charge.id}}"}}
+      ]
+    }
+  },
+  "seed": {
+    "users": [{"email": "admin@example.com", "role": "admin", "password": "${ADMIN_PASSWORD}"}, {"email": "alice@example.com"}],
+    "tables": {"products": [{"id": "11111111-1111-1111-1111-111111111111", "title": "Mug", "price": 10}, {"title": "Shirt", "price": 20}]}
+  },
+  "tests": {
+    "checkout charges and records the order": {
+      "call": "POST /fn/checkout", "as": "alice@example.com",
+      "body": {"product_id": "11111111-1111-1111-1111-111111111111"},
+      "http_mocks": {"https://pay.example.com/": {"body": {"id": "ch_1"}}},
+      "expect": {"status": 200, "body": {"ok": true, "charge": "ch_1"}, "emails": 1,
+                 "db": {"orders": {"where": {"charge_id": "ch_1"}, "count": 1}}}
+    },
+    "checkout needs sign-in": {"call": "POST /fn/checkout", "body": {"product_id": "x"}, "expect": {"status": 401}},
+    "users cannot create products": {"call": "POST /create", "as": "alice@example.com", "body": {"table_id": "products", "data": {"title": "x"}}, "expect": {"status": 403}},
+    "admins can": {"call": "POST /create", "as": "admin@example.com", "body": {"table_id": "products", "data": {"title": "Hat", "price": 5}}, "expect": {"status": 201, "db": {"products": {"count": 3}}}},
+    "anyone can list products": {"call": "POST /query", "body": {"table_id": "products", "order_by": {"price": "asc"}}, "expect": {"status": 200, "body": {"data": [{"title": "Mug"}, {"title": "Shirt"}]}}},
+    "deliberately wrong": {"call": "POST /fn/checkout", "as": "alice@example.com", "body": {"product_id": "p"}, "expect": {"status": 200}}
+  }
+}

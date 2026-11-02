@@ -74,8 +74,8 @@ func HandleForgotPassword(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		tenantID := r.Header.Get("X-Tenant-ID")
-		runInBackground(func() {
-			mailAuthLink(dbPool, cfg, tenantID, r.URL.Path, flow, purposeReset, defaultResetTTL, email, false)
+		mailInBackground(r, func(ctx context.Context) {
+			mailAuthLink(ctx, dbPool, cfg, tenantID, r.URL.Path, flow, purposeReset, defaultResetTTL, email, false)
 		})
 		acceptedResponse(w)
 	}
@@ -100,11 +100,23 @@ func HandleResendVerification(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		tenantID := r.Header.Get("X-Tenant-ID")
-		runInBackground(func() {
-			mailAuthLink(dbPool, cfg, tenantID, r.URL.Path, flow, purposeVerify, defaultVerifyTTL, email, true)
+		mailInBackground(r, func(ctx context.Context) {
+			mailAuthLink(ctx, dbPool, cfg, tenantID, r.URL.Path, flow, purposeVerify, defaultVerifyTTL, email, true)
 		})
 		acceptedResponse(w)
 	}
+}
+
+// mailInBackground runs send after the response, detached from the
+// request's cancellation. Under a test sandbox it runs at once, so a test
+// sees the mail as soon as the request returns.
+func mailInBackground(r *http.Request, send func(ctx context.Context)) {
+	ctx := context.WithoutCancel(r.Context())
+	if pipeline.SandboxFrom(ctx) != nil {
+		send(ctx)
+		return
+	}
+	runInBackground(func() { send(ctx) })
 }
 
 // sendVerificationOnRegister mails the verification link to a new user.
@@ -114,8 +126,8 @@ func sendVerificationOnRegister(r *http.Request, dbPool *tenant.DB, cfg *tenant.
 		return
 	}
 	tenantID := r.Header.Get("X-Tenant-ID")
-	runInBackground(func() {
-		mailAuthLink(dbPool, cfg, tenantID, r.URL.Path, flow, purposeVerify, defaultVerifyTTL, email, true)
+	mailInBackground(r, func(ctx context.Context) {
+		mailAuthLink(ctx, dbPool, cfg, tenantID, r.URL.Path, flow, purposeVerify, defaultVerifyTTL, email, true)
 	})
 }
 
@@ -258,12 +270,14 @@ func hashToken(token string) string {
 // mailAuthLink creates a token for the active user with this email and
 // mails the link. It runs in the background: failures go to the error log
 // (supacraft tenants errors), never to the client.
-func mailAuthLink(db *tenant.DB, cfg *tenant.TenantConfig, tenantID, path string, flow *tenant.AuthEmailFlow, purpose string, defTTL time.Duration, email string, onlyUnverified bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), authEmailTimeout)
+func mailAuthLink(parent context.Context, db *tenant.DB, cfg *tenant.TenantConfig, tenantID, path string, flow *tenant.AuthEmailFlow, purpose string, defTTL time.Duration, email string, onlyUnverified bool) {
+	ctx, cancel := context.WithTimeout(parent, authEmailTimeout)
 	defer cancel()
 	fail := func(err error) {
 		msg := fmt.Sprintf("%s email: %v", purpose, err)
-		if errorlog.Global != nil {
+		if sb := pipeline.SandboxFrom(ctx); sb != nil && sb.Errors != nil {
+			sb.Errors(msg)
+		} else if errorlog.Global != nil {
 			errorlog.Global.Log(tenantID, http.MethodPost, path, http.StatusInternalServerError, msg)
 		} else {
 			slog.Error(msg, "tenant", tenantID)
@@ -339,7 +353,11 @@ func mailAuthLink(db *tenant.DB, cfg *tenant.TenantConfig, tenantID, path string
 		return
 	}
 	smtpCfg := cfg.APISettings.Email.SMTP
-	if _, err := authMailer.Send(ctx, smtpCfg, pipeline.MailMessage{
+	mailer := authMailer
+	if sb := pipeline.SandboxFrom(ctx); sb != nil {
+		mailer = sb.Mailer
+	}
+	if _, err := mailer.Send(ctx, smtpCfg, pipeline.MailMessage{
 		FromEmail: smtpCfg.FromEmail,
 		FromName:  smtpCfg.FromName,
 		To:        []string{email},

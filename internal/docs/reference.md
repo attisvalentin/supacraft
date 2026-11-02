@@ -13,9 +13,13 @@ The authoritative reference for `supacraft.json`. Tables, columns, functions, cr
   "schema": { "tables": [], "relations": [] },
   "api_settings": { ... },
   "functions": { "<name>": { ... } },
-  "cronjobs": { "<name>": { ... } }
+  "cronjobs": { "<name>": { ... } },
+  "seed": { "users": [ ... ], "tables": { ... } },
+  "tests": { "<name>": { ... } }
 }
 ```
+
+`seed` and `tests` are local only (see Seed Data & Tests): `supacraft deploy` never sends them.
 
 `name` is required; every other section is optional. `auth_enabled` turns on the built-in `users` table and `/auth/*` endpoints — the built-in auth columns (`id`, `email`, `password`, `is_active`, `email_verified`, `session_version`, `role`, `created_at`, `updated_at`) are added automatically; declare a `users` table only to add extra columns.
 
@@ -557,6 +561,8 @@ Called function receives args as `{{args.user_id}}`, `{{args.amount}}`. Max recu
 ```
 `url` must be `http` or `https`. Link-local addresses (including the `169.254.169.254` cloud metadata service) are never reachable. When the URL's host comes from a template (`"https://{{request.host}}/..."`), loopback and private networks are refused too, so request data can't aim the server at your internal network. A fixed host in the URL may be anything, including `localhost`.
 
+The response is stored under `assign`: a JSON object response as itself plus `__status` (so `{{charge.id}}`, `{{charge.__status}}`); any other body (array, text) under `__body` next to `__status`.
+
 ### email.send (raw mode)
 ```json
 {
@@ -666,6 +672,70 @@ Pick the column type by intent (all are stored as ISO-8601 TEXT in SQLite):
 | `{{path}} > 0` | Numeric comparison |
 | `{{path}} == null` | Nil check |
 | `{{a}} == {{b}}` | Compare two refs |
+
+---
+
+## Seed Data & Tests
+
+### seed
+Development data, loaded into the local database with `supacraft seed` (MCP `seed`) and into every test run. Never deployed.
+
+```json
+{
+  "seed": {
+    "users": [
+      { "email": "admin@example.com", "role": "admin", "password": "${ADMIN_PASSWORD}" },
+      { "email": "alice@example.com" }
+    ],
+    "tables": {
+      "products": [
+        { "id": "11111111-1111-1111-1111-111111111111", "title": "Mug", "price": 10 },
+        { "title": "Shirt", "price": 20 }
+      ]
+    }
+  }
+}
+```
+
+- `users` (needs `auth_enabled`): `email` is required; `role` defaults to the default role; `password` is a literal or a `"${NAME}"` from `.env`, random when omitted (tests sign in without it). Other keys fill `users` columns. Seed users are email-verified.
+- `tables`: rows by table name, any column (schema flags don't apply). A row without its primary key gets a stable id from its table and position. Add users under `seed.users`, not `tables.users`.
+- Seeding again adds only what is missing: users by email, rows by primary key; existing data is never changed. A table without a primary key is seeded only while it is empty. `supacraft seed --reset` deletes every row of the project's tables first (asks unless `-y`).
+
+### tests
+Each test sends one request to the API on its **own fresh database holding the seed**, in a temporary directory — the local database is never touched. Run them with `supacraft test [name...]` (exits non-zero on failure) or the MCP `run_tests` tool.
+
+```json
+{
+  "tests": {
+    "checkout charges and records the order": {
+      "call": "POST /fn/checkout",
+      "as": "alice@example.com",
+      "body": { "product_id": "11111111-1111-1111-1111-111111111111" },
+      "http_mocks": { "https://pay.example.com/": { "status": 200, "body": { "id": "ch_1" } } },
+      "expect": {
+        "status": 200,
+        "body": { "ok": true, "charge": "ch_1" },
+        "emails": 1,
+        "db": { "orders": { "where": { "charge_id": "ch_1" }, "count": 1 } }
+      }
+    },
+    "checkout needs sign-in": { "call": "POST /fn/checkout", "body": { "product_id": "x" }, "expect": { "status": 401 } }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `call` | `"METHOD /path"`: any API route (`/fn/...`, `/query`, `/create`, `/auth/login`, ...). |
+| `as` | A seed user's email; the request carries a token for that user (no password needed). |
+| `body` / `query` | JSON body; query-string parameters (`{"page": "2"}`). |
+| `http_mocks` | Responses for `http.request` steps by URL prefix (longest wins): `{status (default 200), body}`. A call with no matching mock **fails the test** — tests never reach the network. |
+| `expect.status` | The HTTP status. |
+| `expect.body` | Fields that must match; other fields are ignored, arrays must have the same length. |
+| `expect.emails` | How many emails were sent. Emails are captured, never delivered. |
+| `expect.db` | After the request, `count` rows of the table match `where` (same filter operators as `/query`). |
+
+A failed test reports the differences, the internal server error (if any) and the response. Write tests for every function you add, including the failure cases (missing auth, wrong role, invalid input).
 
 ---
 

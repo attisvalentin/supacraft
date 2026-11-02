@@ -59,7 +59,7 @@ in the project's .env.`,
 
 		var res handler.DeployResponse
 		err = c.Do(cmd.Context(), http.MethodPut, "/admin/tenants/"+url.PathEscape(p.TenantID()), handler.DeployRequest{
-			Project:             p.Raw,
+			Project:             p.WithoutLocalSections(),
 			Replace:             deployReplace,
 			DryRun:              deployDryRun,
 			AllowMissingSecrets: deployAllowMissing,

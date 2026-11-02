@@ -455,3 +455,74 @@ func TestValidate_Roles(t *testing.T) {
 		t.Errorf("auth flags without auth_enabled accepted: %v", got)
 	}
 }
+
+func TestValidate_SeedAndTests(t *testing.T) {
+	p := load(t, `{"name": "x", "auth_enabled": true,
+	  "schema": {"tables": [{"name": "posts", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "title", "type": "varchar"}]}]},
+	  "api_settings": {"auth": {"roles": ["user"]}},
+	  "seed": {
+	    "users": [{"email": "a@x.co", "role": "boss"}, {"email": "a@x.co"}, {"password": 5}],
+	    "tables": {"posts": [{"title": "t", "nope": 1}], "ghost": [], "users": []}},
+	  "tests": {
+	    "bad call": {"call": "FETCH posts", "expect": {"status": 200}},
+	    "query in path": {"call": "GET /fn/x?a=1", "expect": {"status": 200}},
+	    "unknown user": {"call": "GET /fn/x", "as": "b@x.co", "expect": {"status": 200}},
+	    "no expect": {"call": "GET /fn/x"},
+	    "bad expect": {"call": "GET /fn/x", "http_mocks": {"ftp://x": {}}, "expect": {"status": 42, "emails": -1, "db": {"ghost": {"count": 1}, "posts": {}}}},
+	    "fine": {"call": "POST /query", "as": "a@x.co", "body": {"table_id": "posts"}, "expect": {"status": 200, "db": {"posts": {"where": {"title": "t"}, "count": 1}}}}}}`)
+	got := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+		}
+	}
+	for _, want := range []string{
+		"seed.users[0].role", "seed.users[1].email", "seed.users[2].email", "seed.users[2].password",
+		"seed.tables.posts[0].nope", "seed.tables.ghost", "seed.tables.users",
+		"tests.bad call.call", "tests.query in path.call", "tests.unknown user.as", "tests.no expect.expect",
+		"tests.bad expect.http_mocks", "tests.bad expect.expect.status", "tests.bad expect.expect.emails",
+		"tests.bad expect.expect.db.ghost", "tests.bad expect.expect.db.posts.count",
+	} {
+		if !got[want] {
+			t.Errorf("missing error at %s", want)
+		}
+	}
+	for path := range got {
+		if strings.HasPrefix(path, "tests.fine") {
+			t.Errorf("valid test rejected: %s", path)
+		}
+	}
+}
+
+func TestWithoutLocalSections(t *testing.T) {
+	p := load(t, `{"name": "x", "seed": {"tables": {}}, "tests": {}, "functions": {}}`)
+	out := p.WithoutLocalSections()
+	if _, ok := out["seed"]; ok {
+		t.Error("seed is deployed")
+	}
+	if _, ok := out["tests"]; ok {
+		t.Error("tests are deployed")
+	}
+	if _, ok := out["functions"]; !ok || out["name"] != "x" {
+		t.Errorf("other sections lost: %v", out)
+	}
+}
+
+func TestValidate_SeedAndTestShapes(t *testing.T) {
+	p := load(t, `{"name": "x", "auth_enabled": true,
+	  "seed": {"users": {"email": "a@x.co"}, "tables": []},
+	  "tests": {"t": {"call": "GET /fn/a%zz", "query": {"page": 2}, "http_mocks": {"https://x.co/": {"status": "ok"}},
+	                  "expect": {"db": {"users": {"count": 0, "where": []}}}},
+	              "u": {"call": "GET /fn/a", "expect": {"db": {"users": {"count": 0, "where": {"nope": 1, "email": "a@x.co"}}}}}}}`)
+	got := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+		}
+	}
+	for _, want := range []string{"seed.users", "seed.tables", "tests.t.call", "tests.t.query.page", "tests.t.http_mocks.https://x.co/.status", "tests.t.expect.db.users.where", "tests.u.expect.db.users.where.nope"} {
+		if !got[want] {
+			t.Errorf("missing error at %s (got %v)", want, got)
+		}
+	}
+}
