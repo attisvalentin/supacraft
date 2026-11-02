@@ -27,6 +27,9 @@ var authUserColumns = []map[string]any{
 	// Bumped by a password reset; tokens carry it as "ver" and older ones
 	// are rejected.
 	{"name": "session_version", "type": "int", "readable": false, "creatable": false, "updatable": false},
+	// One of api_settings.auth.roles; set on register, changed with
+	// `supacraft users set-role` or a function. NULL means the default role.
+	{"name": "role", "type": "varchar", "creatable": false, "updatable": false},
 	{"name": "created_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 	{"name": "updated_at", "type": "timestamp", "readable": true, "creatable": false, "updatable": false},
 }

@@ -17,7 +17,7 @@ The authoritative reference for `supacraft.json`. Tables, columns, functions, cr
 }
 ```
 
-`name` is required; every other section is optional. `auth_enabled` turns on the built-in `users` table and `/auth/*` endpoints — the built-in auth columns (`id`, `email`, `password`, `is_active`, `email_verified`, `session_version`, `created_at`, `updated_at`) are added automatically; declare a `users` table only to add extra columns.
+`name` is required; every other section is optional. `auth_enabled` turns on the built-in `users` table and `/auth/*` endpoints — the built-in auth columns (`id`, `email`, `password`, `is_active`, `email_verified`, `session_version`, `role`, `created_at`, `updated_at`) are added automatically; declare a `users` table only to add extra columns.
 
 The database is SQLite. Schema changes are **additive**: new tables and new columns are created, but drops, renames and type changes are not applied to existing data.
 
@@ -175,7 +175,7 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 **`email.smtp.provider`**: free-form label (e.g. `custom`, `resend`, `sendgrid`, `mailgun`, `ses`, `gmail`). For Gmail use `host: smtp.gmail.com`, `port: 587`, `encryption: tls`, `username`: the Gmail address, `password`: a Google **App Password** (requires 2-Step Verification — a normal account password will not work).
 
-**`file_endpoints`**: Per-endpoint `enabled`/`auth` settings for file storage. Downloads are served with `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`. Only images (except SVG), audio, video and PDF display in the browser; everything else downloads as an attachment, so uploaded files never run on the API's origin. Three endpoints: `upload`, `download`, `delete`. Each has `enabled` (default `true`) and `auth` (default `false`). Set `auth: true` to require JWT. File upload (`POST /files`) returns `{ "path": "...", "size": ..., "mime": "..." }` — store the `path` in a `varchar` column. File endpoints need a configured `storage` driver (see below) — generate both together.
+**`file_endpoints`**: Per-endpoint `enabled`/`auth`/`roles` settings for file storage. Downloads are served with `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`. Only images (except SVG), audio, video and PDF display in the browser; everything else downloads as an attachment, so uploaded files never run on the API's origin. Three endpoints: `upload`, `download`, `delete`. Each has `enabled` (default `true`) and `auth` (default `false`). Set `auth: true` to require JWT. File upload (`POST /files`) returns `{ "path": "...", "size": ..., "mime": "..." }` — store the `path` in a `varchar` column. File endpoints need a configured `storage` driver (see below) — generate both together.
 
 **`storage`**: Where uploaded files are kept. Shape: `{ "driver": <name>, "config": { ... }, "max_file_size": <bytes>, "allowed_mimes": [<mime>, ...] }`. `config`, `max_file_size`, and `allowed_mimes` are optional. **`local` is the default** — use it whenever the user is undecided; it needs no `config` and stores files on the API server's filesystem under `{STORAGE_PATH}/{tenant-id}/...` (`.supacraft/storage` in the project). When the user wants a cloud/remote backend, set `driver` and the `config` fields below.
 
@@ -201,7 +201,36 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 A path (`"https://example.com/app"`) or an array is **invalid** — validation rejects it. Only affects browser JS; server-to-server, CLI, and `curl`/Postman ignore CORS. Credentials mode is not used (no `Access-Control-Allow-Credentials`), so authenticate with the `Authorization` Bearer header, not cookies.
 
-**Row policy variables:** `$auth.id` (user UUID from JWT `sub`), `$auth.email`
+**Row policy variables:** `$auth.id` (user UUID from JWT `sub`), `$auth.email`, `$auth.role` (the user's role, see Roles). Each is passed as a query parameter, e.g. `"row_policy": "owner_id = $auth.id OR $auth.role = 'admin'"`.
+
+### Roles
+
+Give users a role and limit endpoints to some roles (needs `auth_enabled: true`):
+
+```json
+{
+  "api_settings": {
+    "auth": { "roles": ["user", "editor", "admin"], "default_role": "user" },
+    "tables": {
+      "posts": {
+        "query":  { "enabled": true },
+        "create": { "enabled": true, "roles": ["editor", "admin"] },
+        "delete": { "enabled": true, "roles": ["admin"] }
+      }
+    },
+    "file_endpoints": { "upload": { "roles": ["editor", "admin"] } }
+  },
+  "functions": {
+    "stats": { "route": { "path": "/fn/stats", "method": "GET", "roles": ["admin"] }, "steps": [ ... ] }
+  }
+}
+```
+
+- `roles`: role names (lowercase letters, digits, `_`; start with a letter; at most 32 characters). Each user has one role, stored in the built-in `users.role` column.
+- `default_role`: the role of new users (default: the first role). A user whose role is NULL has the default role; a role you later remove from `roles` counts as no role.
+- A `roles` list on a table method, a file endpoint or a function `route` allows only those roles and implies `auth`/`auth_required` (don't set them to `false`). No token → `401`; wrong role → `403 {"error": "forbidden"}`. An `include` of a table the user may not query is rejected.
+- The role is read from the database on every request, so a change applies at once to tokens already issued.
+- Clients can never set `role` (not at `/auth/register`, not with `/update`). Change it with `supacraft users set-role <email> <role>` (`--server` for a central server, `--local` for the project's own database), from a function that sets `bypass_schema_flags: true` (a field of the function, next to `route`) and runs a `db.update` on `users`, e.g. an admin-only `/fn/promote`, or with the MCP `set_user_role` tool, which only applies a change after the user approves it in a prompt. `supacraft users list` and the MCP `list_users` tool show every user's role.
 
 ---
 
@@ -227,6 +256,7 @@ A path (`"https://example.com/app"`) or an array is **invalid** — validation r
 - The key is the function name; `function.call` refers to it via `function_id`
 - `method`: `GET | POST | PUT | PATCH | DELETE | PRIVATE`
 - `PRIVATE` functions are only callable via `function.call`, not via HTTP
+- `roles`: optional; only users with one of these roles may call the function (implies `auth_required`, see Roles)
 - `url_params`: optional, GET only. Key = param name, value = default (empty = required). Omit for unrestricted params.
 
 ### Path parameters
@@ -568,6 +598,7 @@ Called function receives args as `{{args.user_id}}`, `{{args.amount}}`. Max recu
 | `now` | Yes (in tenant timezone) | Yes (in tenant timezone) |
 | `auth.user_id` | Yes (auth_required: true) | No |
 | `auth.email` | Yes (auth_required: true) | No |
+| `auth.role` | Yes (auth_required: true; "" when roles are off) | No |
 | `request.*` | Yes POST/PUT/PATCH | No |
 | `query.*` | Yes | No |
 | `params.*` | Yes (path parameters) | No |
@@ -746,8 +777,8 @@ Use this section when writing scripts, `curl` commands, or client code that talk
 Available when `auth_enabled: true` on the tenant and the specific endpoint is enabled in `api_settings.auth_endpoints`.
 
 - Passwords need at least `api_settings.auth.password_min_length` characters (default 8, allowed 1–72) and at most 72 bytes.
-- Register accepts `email`, `password` and any **creatable** column you added to `users` (e.g. a display name). Columns that grant access (`role`, `is_admin`, `plan`, …) must be `"creatable": false, "updatable": false`, otherwise anyone can register as an admin; validation warns about such columns.
-- The built-in columns (`id`, `email`, `password`, `is_active`, `email_verified`, `session_version`, `created_at`, `updated_at`) keep their own settings even if you declare them in `users`. `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens, and their tokens stop working at once. `email_verified` is set by `/auth/verify-email` (and by a password reset); `session_version` is internal (a password reset bumps it, which ends every session issued before).
+- Register accepts `email`, `password` and any **creatable** column you added to `users` (e.g. a display name). For roles use the built-in `role` column (see Roles). Other columns that grant access (`is_admin`, `plan`, …) must be `"creatable": false, "updatable": false`, otherwise anyone can register as an admin; validation warns about such columns.
+- The built-in columns (`id`, `email`, `password`, `is_active`, `email_verified`, `session_version`, `role`, `created_at`, `updated_at`) keep their own settings even if you declare them in `users`. `is_active` is set by your own functions or cron jobs, never by the client. A user with `is_active = false` cannot log in or refresh tokens, and their tokens stop working at once. `email_verified` is set by `/auth/verify-email` (and by a password reset); `session_version` is internal (a password reset bumps it, which ends every session issued before).
 
 #### POST /auth/register
 ```bash
@@ -922,6 +953,7 @@ curl -X POST http://localhost:8080/fn/create-order \
 ```
 
 - `auth_required: true` → must include JWT
+- `roles` → the user must have one of them, otherwise `403`
 - POST/PUT/PATCH body → available as `request.*` in pipeline context
 - URL query params → available as `query.*` in pipeline context
 - Path parameters (`/fn/posts/{id}`) → available as `params.*`

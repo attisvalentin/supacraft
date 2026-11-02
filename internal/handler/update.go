@@ -38,14 +38,9 @@ func HandleUpdate(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		var claims *tenant.AuthClaims
-		if tableSettings.Update.Auth {
-			var err error
-			claims, err = validateJWT(r, cfg, pool)
-			if err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		claims, ok := authorize(w, r, cfg, pool, tableSettings.Update.Auth, tableSettings.Update.Roles)
+		if !ok {
+			return
 		}
 
 		table, err := schema.FindTable(&cfg.Schema, req.TableID)

@@ -47,7 +47,11 @@ Deploying: a central server is production. Deploy only when the user asks. First
 and report its result (migrations, warnings, missing secrets); run "supacraft deploy" only after the user confirms.
 A deploy sends supacraft.json; secret values stay on the server. After a deploy, get_server_errors shows what fails
 in production and list_tenants shows every API on the server. Disabling or removing a tenant is the user's call:
-give them "supacraft tenants disable|enable|remove <id>" instead of running it.`
+give them "supacraft tenants disable|enable|remove <id>" instead of running it.
+
+Roles: api_settings.auth.roles defines them; "roles" on a table method, file endpoint or function route limits
+access. list_users shows who has which role. Change a role only when the user asks: set_user_role makes the user
+approve every change in a prompt (you cannot approve it); otherwise give them "supacraft users set-role <email> <role>".`
 
 // Options configures the MCP server.
 type Options struct {
@@ -175,7 +179,7 @@ func (s *server) register(srv *mcp.Server) {
 			})
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "set_function", Description: "Create or replace a pipeline function by name: {route:{path:\"/fn/...\" (segments like {id} become {{params.id}}), method, auth_required, input?, url_params?}, steps:[...]}. See supacraft://reference for step types."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_function", Description: "Create or replace a pipeline function by name: {route:{path:\"/fn/...\" (segments like {id} become {{params.id}}), method, auth_required, roles?, input?, url_params?}, steps:[...]}. See supacraft://reference for step types."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Name     string         `json:"name"`
 			Function map[string]any `json:"function"`
@@ -215,7 +219,7 @@ func (s *server) register(srv *mcp.Server) {
 			})
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "set_auth", Description: "Turn built-in user auth (/auth/register, /auth/login, /auth/refresh and the users table) on or off. Password reset and email verification are configured with update_api_settings (auth.password_reset, auth.email_verification; see the reference)."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_auth", Description: "Turn built-in user auth (/auth/register, /auth/login, /auth/refresh and the users table) on or off. Password reset, email verification and roles are configured with update_api_settings (auth.password_reset, auth.email_verification, auth.roles; see the reference)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Enabled bool `json:"enabled"`
 		}) (*mcp.CallToolResult, any, error) {
@@ -266,6 +270,26 @@ func (s *server) register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_tenants", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List every tenant (API) on the central server (SUPACRAFT_SERVER): id, name, enabled/disabled, table/function/cron counts, database size, last update. Read-only."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 			return s.listTenants(ctx)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "list_users", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List the project's users with their role (api_settings.auth.roles), active and verified status. Reads the local project's database, or the central server's (SUPACRAFT_SERVER) with server: true. Never returns password hashes."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Server bool `json:"server,omitempty"`
+			Limit  int  `json:"limit,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			if in.Limit <= 0 {
+				in.Limit = 100
+			}
+			return s.listUsers(ctx, in.Server, in.Limit)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_user_role", Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)}, Description: "Give a user (by email) one of the roles in api_settings.auth.roles, in the local project or with server: true on the central server. The user must approve every change in a confirmation prompt; you cannot approve it, and if the client can't show the prompt nothing changes and the result gives the command for the user to run. Only call it when the user asked for that role change."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Email  string `json:"email"`
+			Role   string `json:"role"`
+			Server bool   `json:"server,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.setUserRole(ctx, req, in.Server, in.Email, in.Role)
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "check_secrets", Description: "List the \"${NAME}\" secrets the project references and which are set — on the central server when SUPACRAFT_SERVER is configured, otherwise in .env. Returns names only, never values, plus the command the user runs to set a missing one. Never ask the user for a secret value in chat."},

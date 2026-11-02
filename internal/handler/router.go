@@ -83,6 +83,8 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 		r.Post("/admin/tenants/{tenantID}/disable", HandleTenantSetDisabled(serverCfg, store, true))
 		r.Post("/admin/tenants/{tenantID}/enable", HandleTenantSetDisabled(serverCfg, store, false))
 		r.Get("/admin/tenants/{tenantID}/errors", HandleTenantErrors(serverCfg, errLog))
+		r.Get("/admin/tenants/{tenantID}/users", HandleUsersList(serverCfg))
+		r.Post("/admin/tenants/{tenantID}/users/role", HandleUserSetRole(serverCfg))
 		r.Get("/admin/tenants/{tenantID}/secrets", HandleSecretsList(serverCfg))
 		r.Put("/admin/tenants/{tenantID}/secrets/{name}", HandleSecretSet(serverCfg, store))
 		r.Delete("/admin/tenants/{tenantID}/secrets/{name}", HandleSecretUnset(serverCfg, store))

@@ -86,7 +86,8 @@ func TestGetPool_MigratesOldAuthSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	var active, verified, version int
-	if err := db.QueryRow(ctx, `SELECT COALESCE("is_active", 1), COALESCE("email_verified", 0), COALESCE("session_version", 0) FROM users`).Scan(&active, &verified, &version); err != nil && err != sql.ErrNoRows {
+	var role sql.NullString
+	if err := db.QueryRow(ctx, `SELECT COALESCE("is_active", 1), COALESCE("email_verified", 0), COALESCE("session_version", 0), "role" FROM users`).Scan(&active, &verified, &version, &role); err != nil && err != sql.ErrNoRows {
 		t.Fatalf("auth columns missing: %v", err)
 	}
 	if _, err := db.Exec(ctx, `SELECT COUNT(*) FROM "_supacraft_auth_tokens"`); err != nil {

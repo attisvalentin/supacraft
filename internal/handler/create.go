@@ -37,11 +37,8 @@ func HandleCreate(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		if tableSettings.Create.Auth {
-			if _, err := validateJWT(r, cfg, pool); err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		if _, ok := authorize(w, r, cfg, pool, tableSettings.Create.Auth, tableSettings.Create.Roles); !ok {
+			return
 		}
 
 		table, err := schema.FindTable(&cfg.Schema, req.TableID)

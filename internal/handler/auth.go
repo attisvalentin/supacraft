@@ -108,6 +108,9 @@ func HandleRegister(pool *tenant.PoolManager) http.HandlerFunc {
 
 		// Assign the primary key after validation (server-controlled).
 		body["id"] = uuid.NewString()
+		if role := cfg.APISettings.Auth.DefaultRoleName(); role != "" {
+			body["role"] = role
+		}
 
 		insertSQL, args := query.BuildInsert(table.Name, body)
 		res, err := dbPool.Exec(r.Context(), insertSQL, args...)
@@ -390,37 +393,65 @@ func validateJWT(r *http.Request, cfg *tenant.TenantConfig, pool *tenant.PoolMan
 
 	userID, _ := claims["sub"].(string)
 	email, _ := claims["email"].(string)
-	if !sessionValid(r.Context(), dbPool, userID, claims["ver"]) {
+	// A token is good while the user exists, is active and hasn't reset
+	// the password since it was issued ("ver"; absent counts as 0).
+	sess, ok := loadSession(r.Context(), dbPool, userID)
+	if claimed, _ := claims["ver"].(float64); !ok || int64(claimed) != sess.version {
 		return nil, fmt.Errorf("session ended")
 	}
 
 	return &tenant.AuthClaims{
 		UserID: userID,
 		Email:  email,
+		Role:   cfg.APISettings.Auth.EffectiveRole(sess.role),
 	}, nil
+}
+
+// authorize enforces a route's access rule: needAuth requires a valid
+// token, and roles (non-empty implies needAuth) one of those roles. On
+// failure it writes 401 (no valid token) or 403 (wrong role) and returns
+// ok=false. Claims are nil when the route is public.
+func authorize(w http.ResponseWriter, r *http.Request, cfg *tenant.TenantConfig, pool *tenant.PoolManager, needAuth bool, roles []string) (*tenant.AuthClaims, bool) {
+	if !needAuth && len(roles) == 0 {
+		return nil, true
+	}
+	claims, err := validateJWT(r, cfg, pool)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return nil, false
+	}
+	if !tenant.RoleAllowed(roles, claims.Role) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return nil, false
+	}
+	return claims, true
+}
+
+// session is what a token is checked against on every request.
+type session struct {
+	version int64
+	role    *string // users.role as stored; see AuthSettings.EffectiveRole
+}
+
+// loadSession reads the user's session if the user exists and is active;
+// ok is false otherwise.
+func loadSession(ctx context.Context, db *tenant.DB, userID string) (s session, ok bool) {
+	if userID == "" {
+		return s, false
+	}
+	var active bool
+	err := db.QueryRow(ctx,
+		`SELECT COALESCE("is_active", 1), COALESCE("session_version", 0), "role" FROM "users" WHERE "id" = ?`, userID,
+	).Scan(&active, &s.version, &s.role)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		slog.Warn("session check failed", "error", err)
+	}
+	return s, err == nil && active
 }
 
 // sessionVersion returns the user's session version if the user exists
 // and is active; ok is false otherwise.
 func sessionVersion(ctx context.Context, db *tenant.DB, userID string) (version int64, ok bool) {
-	if userID == "" {
-		return 0, false
-	}
-	var active bool
-	err := db.QueryRow(ctx,
-		`SELECT COALESCE("is_active", 1), COALESCE("session_version", 0) FROM "users" WHERE "id" = ?`, userID,
-	).Scan(&active, &version)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		slog.Warn("session check failed", "error", err)
-	}
-	return version, err == nil && active
-}
-
-// sessionValid reports whether a token for userID carrying ver (its "ver"
-// claim; absent counts as 0) is still good: the user exists, is active,
-// and hasn't reset the password since it was issued.
-func sessionValid(ctx context.Context, db *tenant.DB, userID string, ver any) bool {
-	current, ok := sessionVersion(ctx, db, userID)
-	claimed, _ := ver.(float64)
-	return ok && int64(claimed) == current
+	s, ok := loadSession(ctx, db, userID)
+	return s.version, ok
 }
