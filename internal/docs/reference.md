@@ -226,11 +226,11 @@ Give users a role and limit endpoints to some roles (needs `auth_enabled: true`)
 }
 ```
 
-- `roles`: role names (lowercase letters, digits, `_`; start with a letter). Each user has one role, stored in the built-in `users.role` column.
+- `roles`: role names (lowercase letters, digits, `_`; start with a letter; at most 32 characters). Each user has one role, stored in the built-in `users.role` column.
 - `default_role`: the role of new users (default: the first role). A user whose role is NULL has the default role; a role you later remove from `roles` counts as no role.
 - A `roles` list on a table method, a file endpoint or a function `route` allows only those roles and implies `auth`/`auth_required` (don't set them to `false`). No token → `401`; wrong role → `403 {"error": "forbidden"}`. An `include` of a table the user may not query is rejected.
 - The role is read from the database on every request, so a change applies at once to tokens already issued.
-- Clients can never set `role` (not at `/auth/register`, not with `/update`). Change it with `supacraft users set-role <email> <role>` (`--server` for a central server, `--local` for the project's own database), from a function (`db.update` on `users` with `bypass_schema_flags: true`, e.g. an admin-only `/fn/promote`), or with the MCP `set_user_role` tool, which only applies a change after the user approves it in a prompt. `supacraft users list` and the MCP `list_users` tool show every user's role.
+- Clients can never set `role` (not at `/auth/register`, not with `/update`). Change it with `supacraft users set-role <email> <role>` (`--server` for a central server, `--local` for the project's own database), from a function that sets `bypass_schema_flags: true` (a field of the function, next to `route`) and runs a `db.update` on `users`, e.g. an admin-only `/fn/promote`, or with the MCP `set_user_role` tool, which only applies a change after the user approves it in a prompt. `supacraft users list` and the MCP `list_users` tool show every user's role.
 
 ---
 

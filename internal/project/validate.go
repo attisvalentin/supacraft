@@ -214,6 +214,9 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 				v.errorf(cpath+".enum_values", "enum column %q needs enum_values", cname)
 			}
 			// users.role is built in and never client-settable.
+			if authEnabled && name == "users" && cname == "role" {
+				v.warnf(cpath, "users.role is built in: this declaration is ignored and clients can never set it (see api_settings.auth.roles)")
+			}
 			if authEnabled && name == "users" && cname != "role" && privilegedColumn.MatchString(cname) {
 				if c, set := cm["creatable"].(bool); !set || c {
 					v.warnf(cpath+".creatable", "users.%s looks like a permission; anyone can set it at /auth/register unless it has \"creatable\": false", cname)

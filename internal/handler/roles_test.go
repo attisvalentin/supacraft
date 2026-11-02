@@ -82,7 +82,7 @@ func TestRoles(t *testing.T) {
 	}
 	defer db.Close()
 	for i, owner := range []string{aliceID, bobID, bobID} {
-		if _, err := db.Exec(`INSERT INTO "notes" ("id", "body", "owner_id") VALUES (?, 'n', ?)`, string(rune('a'+i)), owner); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO "notes" ("id", "body", "owner_id") VALUES (?, 'n', ?)`, string(rune('a'+i)), owner); err != nil {
 			t.Fatal(err)
 		}
 	}

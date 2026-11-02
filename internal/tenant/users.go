@@ -82,7 +82,7 @@ func ListUsers(ctx context.Context, dataDir, id string, limit, offset int) ([]Us
 	db, auth, err := openUsers(ctx, dataDir, id)
 	if err != nil {
 		if errors.Is(err, ErrNoRoles) {
-			return nil, 0, nil
+			return []UserInfo{}, 0, nil
 		}
 		return nil, 0, err
 	}
@@ -90,7 +90,7 @@ func ListUsers(ctx context.Context, dataDir, id string, limit, offset int) ([]Us
 	var total int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM "users"`).Scan(&total); err != nil {
 		if strings.Contains(err.Error(), "no such table") {
-			return nil, 0, nil
+			return []UserInfo{}, 0, nil
 		}
 		return nil, 0, err
 	}
