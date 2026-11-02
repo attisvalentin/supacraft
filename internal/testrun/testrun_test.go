@@ -125,3 +125,77 @@ func TestMatch(t *testing.T) {
 		t.Errorf("want 3 differences, got %v", d)
 	}
 }
+
+func writeProject(t *testing.T, cfg, env string) *project.Project {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, project.FileName), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := project.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// Tests use local storage whatever the project configures, and results
+// never show .env values.
+func TestRun_Isolation(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "files",
+  "api_settings": {
+    "env": {"HOOK": "${HOOK_URL}"},
+    "storage": {"driver": "s3", "config": {"key": "${S3_KEY}", "secret": "${S3_SECRET}", "region": "eu-central-1", "bucket": "b"}}
+  },
+  "functions": {
+    "hook": {"route": {"path": "/fn/hook", "method": "POST"},
+             "steps": [{"type": "http.request", "url": "{{env.HOOK}}", "method": "POST", "assign": "r"}, {"type": "response", "data": {}}]}
+  },
+  "tests": {
+    "download through local storage": {"call": "GET /files/nothing.png", "expect": {"status": 404}},
+    "unmocked hook": {"call": "POST /fn/hook", "expect": {"status": 200}}
+  }
+}`, "HOOK_URL=https://hooks.example.com/s3cr3t-token\nS3_KEY=AKIAEXAMPLEKEY\nS3_SECRET=supersecretvalue\n")
+	results, err := Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if r.Name == "download through local storage" && !r.Passed {
+			t.Errorf("storage was not local: %+v", r)
+		}
+		if r.Name == "unmocked hook" {
+			all := strings.Join(append(append([]string{r.Body}, r.Failures...), r.ServerErrors...), "\n")
+			if r.Passed || strings.Contains(all, "s3cr3t-token") || !strings.Contains(all, "[secret HOOK_URL]") {
+				t.Errorf("hook result leaks or misses the mask: %+v", r)
+			}
+		}
+	}
+
+	if _, err := Run(context.Background(), p, "no such test"); err == nil {
+		t.Error("an unknown test name was accepted")
+	}
+}
+
+func TestSeed_ReportsInvalidRows(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "strict",
+  "schema": {"tables": [{"name": "items", "columns": [
+    {"name": "id", "type": "uuid", "primary": true}, {"name": "title", "type": "varchar", "nullable": false}]}]},
+  "seed": {"tables": {"items": [{"id": "a"}]}}
+}`, "")
+	if _, err := SeedLocal(context.Background(), p, false); err == nil || !strings.Contains(err.Error(), "items row 0") {
+		t.Fatalf("a row breaking NOT NULL was not reported: %v", err)
+	}
+}
+
+func TestEmptySections(t *testing.T) {
+	p := writeProject(t, `{"name": "empty", "seed": [], "tests": []}`, "")
+	if results, err := Run(context.Background(), p); err != nil || len(results) != 0 {
+		t.Fatalf("%v %v", results, err)
+	}
+}

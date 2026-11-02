@@ -55,6 +55,11 @@ func Run(ctx context.Context, p *project.Project, only ...string) ([]Result, err
 	if err != nil {
 		return nil, err
 	}
+	for _, n := range only {
+		if _, ok := tests[n]; !ok {
+			return nil, fmt.Errorf("no test named %q", n)
+		}
+	}
 	names := make([]string, 0, len(tests))
 	for name := range tests {
 		if len(only) == 0 || contains(only, name) {
@@ -92,6 +97,9 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 		return nil, err
 	}
 	id := p.TenantID()
+	if err := localStorageOnly(dir, id); err != nil {
+		return nil, err
+	}
 	cfg := &config.Config{
 		DataDir:       dir,
 		StoragePath:   filepath.Join(dir, "storage"),
@@ -128,7 +136,10 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 	res := &Result{Name: name}
 	fail := func(format string, args ...any) { res.Failures = append(res.Failures, fmt.Sprintf(format, args...)) }
 
-	method, path, _ := project.ParseCall(t.Call)
+	method, path, ok := project.ParseCall(t.Call)
+	if _, err := url.ParseRequestURI(path); !ok || err != nil {
+		return nil, fmt.Errorf("invalid call %q", t.Call)
+	}
 	if len(t.Query) > 0 {
 		q := url.Values{}
 		for k, v := range t.Query {
@@ -205,7 +216,42 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 	if !res.Passed {
 		res.Body = oneLine(rec.Body.String())
 	}
+	// .env values end up in URLs and error messages; results are shown to
+	// agents, so mask them like the server error log does.
+	for i := range res.Failures {
+		res.Failures[i] = handler.MaskSecrets(res.Failures[i], env)
+	}
+	for i := range res.ServerErrors {
+		res.ServerErrors[i] = handler.MaskSecrets(res.ServerErrors[i], env)
+	}
+	res.Body = handler.MaskSecrets(res.Body, env)
 	return res, nil
+}
+
+// localStorageOnly points the test tenant's file storage at the temporary
+// directory, so a test never reaches S3, FTP or any other remote storage
+// (and its credentials leave the config).
+func localStorageOnly(dir, id string) error {
+	path := filepath.Join(dir, "tenants", id+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return err
+	}
+	settings, _ := cfg["api_settings"].(map[string]any)
+	st, _ := settings["storage"].(map[string]any)
+	if st == nil {
+		return nil
+	}
+	st["driver"] = "local"
+	delete(st, "config")
+	if data, err = json.Marshal(cfg); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 // signIn issues an access token for a seed user, as /auth/login would.

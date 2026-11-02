@@ -80,6 +80,9 @@ func decodeSection(raw, out any) error {
 	if raw == nil {
 		return nil
 	}
+	if arr, ok := raw.([]any); ok && len(arr) == 0 {
+		return nil // validation accepts [] as an empty section
+	}
 	data, err := json.Marshal(raw)
 	if err != nil {
 		return err
@@ -120,8 +123,17 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 			roles[name] = true
 		}
 	}
-	if users := asSlice(seed["users"]); len(users) > 0 && !authEnabled {
-		v.errorf("seed.users", "needs auth_enabled: true")
+	if users, set := seed["users"]; set && users != nil {
+		if _, isList := users.([]any); !isList {
+			v.errorf("seed.users", "must be a list of users")
+		} else if len(asSlice(users)) > 0 && !authEnabled {
+			v.errorf("seed.users", "needs auth_enabled: true")
+		}
+	}
+	if tables, set := seed["tables"]; set && tables != nil {
+		if _, isMap := tables.(map[string]any); !isMap {
+			v.errorf("seed.tables", "must be an object of table name → rows")
+		}
 	}
 	for i, u := range asSlice(seed["users"]) {
 		path := fmt.Sprintf("seed.users[%d]", i)
@@ -196,15 +208,35 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 			v.errorf(path+".call", "must be \"METHOD /path\", e.g. \"POST /fn/checkout\" (methods: GET, POST, PUT, PATCH, DELETE)")
 		} else if strings.Contains(p, "?") {
 			v.errorf(path+".call", "put query parameters in \"query\", not in the path")
+		} else if _, err := url.ParseRequestURI(p); err != nil {
+			v.errorf(path+".call", "invalid path %q", p)
+		}
+		if q, set := tm["query"]; set && q != nil {
+			qm, isMap := q.(map[string]any)
+			if !isMap {
+				v.errorf(path+".query", "must be an object of string values")
+			}
+			for k, qv := range qm {
+				if _, isStr := qv.(string); !isStr {
+					v.errorf(path+".query."+k, "must be a string (write \"2\", not 2)")
+				}
+			}
 		}
 		if as, set := tm["as"]; set && as != nil {
 			if email, _ := as.(string); !emails[email] {
 				v.errorf(path+".as", "%v is not a seed user (add it to seed.users)", as)
 			}
 		}
-		for prefix := range asMap(tm["http_mocks"]) {
+		for prefix, mock := range asMap(tm["http_mocks"]) {
 			if u, err := url.Parse(prefix); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 				v.errorf(path+".http_mocks", "%q must be an http(s) URL (prefix)", prefix)
+			}
+			if _, isMap := mock.(map[string]any); !isMap {
+				v.errorf(path+".http_mocks."+prefix, "must be an object {status?, body?}")
+			} else if st, set := asMap(mock)["status"]; set {
+				if n, isNum := st.(float64); !isNum || n < 100 || n > 599 || n != float64(int(n)) {
+					v.errorf(path+".http_mocks."+prefix+".status", "must be an HTTP status code")
+				}
 			}
 		}
 		expect, ok := tm["expect"].(map[string]any)
@@ -228,6 +260,11 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 			}
 			if c, isNum := asMap(de)["count"].(float64); !isNum || c < 0 || c != float64(int(c)) {
 				v.errorf(path+".expect.db."+table+".count", "must be a row count")
+			}
+			if w, set := asMap(de)["where"]; set && w != nil {
+				if _, isMap := w.(map[string]any); !isMap {
+					v.errorf(path+".expect.db."+table+".where", "must be an object")
+				}
 			}
 		}
 	}

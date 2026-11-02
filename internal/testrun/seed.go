@@ -83,7 +83,9 @@ func Seed(ctx context.Context, db *sql.DB, cfg *tenant.TenantConfig, seed *proje
 				data[pk] = uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("supacraft-seed/%s/%d", name, i))).String()
 			}
 			stmt, args := query.BuildInsert(name, data)
-			r, err := tx.ExecContext(ctx, strings.Replace(stmt, "INSERT INTO", "INSERT OR IGNORE INTO", 1), args...)
+			// ON CONFLICT DO NOTHING skips only rows already there; unlike
+			// OR IGNORE it still reports NOT NULL or CHECK violations.
+			r, err := tx.ExecContext(ctx, stmt+" ON CONFLICT DO NOTHING", args...)
 			if err != nil {
 				return nil, fmt.Errorf("seed %s row %d: %w", name, i, err)
 			}
