@@ -19,6 +19,7 @@ import (
 
 	"github.com/attisvalentin/supacraft/internal/docs"
 	"github.com/attisvalentin/supacraft/internal/errorlog"
+	"github.com/attisvalentin/supacraft/internal/openapi"
 	"github.com/attisvalentin/supacraft/internal/project"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -33,6 +34,7 @@ Workflow:
    Each write is validated first; on errors nothing is saved and the issues are returned — fix them and retry.
    Valid writes are saved, the database is migrated (additive: new tables/columns) and the running API reloads.
 3. Test with call_endpoint (e.g. GET /fn/posts) and inspect data with query_db. get_logs shows recent API errors.
+   get_openapi returns the API as OpenAPI 3.1, e.g. to write a frontend against it.
 
 Rules: identify tables, functions, cronjobs and email templates by name, never by UUID. Prefer pipeline functions
 (/fn/...) over the raw CRUD endpoints.
@@ -209,7 +211,7 @@ func (s *server) register(srv *mcp.Server) {
 			return s.setEntry(ctx, "cronjobs", in.Name, nil)
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "update_api_settings", Description: "Deep-merge into api_settings (tables, auth, auth_endpoints, crud_endpoints, file_endpoints, env, email, storage, timezone, rate_limit, cors). Objects merge key by key; a null value deletes that key. Secrets must be \"${NAME}\" references to .env."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "update_api_settings", Description: "Deep-merge into api_settings (tables, auth, auth_endpoints, crud_endpoints, file_endpoints, env, email, storage, timezone, rate_limit, cors, openapi). Objects merge key by key; a null value deletes that key. Secrets must be \"${NAME}\" references to .env."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Settings map[string]any `json:"settings"`
 		}) (*mcp.CallToolResult, any, error) {
@@ -270,6 +272,25 @@ func (s *server) register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_tenants", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List every tenant (API) on the central server (SUPACRAFT_SERVER): id, name, enabled/disabled, table/function/cron counts, database size, last update. Read-only."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 			return s.listTenants(ctx)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_openapi", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Return the project's API as an OpenAPI 3.1 JSON document (auth, CRUD and file endpoints it enables, pipeline functions, request/response schemas). Use it to write a frontend or client, or give it to the user for Swagger/Postman; the user can also run `supacraft openapi -o openapi.json`."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			ServerURL string `json:"server_url,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			p, err := project.Load(s.opts.Dir)
+			if err != nil {
+				return nil, nil, err
+			}
+			cfg, err := p.TenantConfig()
+			if err != nil {
+				return nil, nil, err
+			}
+			server := in.ServerURL
+			if server == "" {
+				server = s.opts.APIURL
+			}
+			return jsonResult(openapi.Build(cfg, openapi.Options{ServerURL: server})), nil, nil
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_users", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List the project's users with their role (api_settings.auth.roles), active and verified status. Reads the local project's database, or the central server's (SUPACRAFT_SERVER) with server: true. Never returns password hashes."},

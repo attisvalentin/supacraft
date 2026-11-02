@@ -273,6 +273,11 @@ func (v *validator) apiSettings(s map[string]any) {
 	if n, ok := asMap(s["auth"])["password_min_length"].(float64); ok && n > tenant.MaxPasswordBytes {
 		v.errorf("api_settings.auth.password_min_length", "must be at most %d (bcrypt uses only the first %d bytes)", tenant.MaxPasswordBytes, tenant.MaxPasswordBytes)
 	}
+	if val, ok := s["openapi"]; ok && val != nil {
+		if _, isBool := val.(bool); !isBool {
+			v.errorf("api_settings.openapi", "must be true or false")
+		}
+	}
 	if tz, _ := s["timezone"].(string); tz != "" && tz != "UTC" {
 		if tenant.LoadTimezone(tz).String() == "UTC" {
 			v.errorf("api_settings.timezone", "unknown IANA timezone %q", tz)

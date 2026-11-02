@@ -251,7 +251,7 @@ func TestFunctionWhere_RejectsOperatorInjection(t *testing.T) {
 func TestTenantHeader_RejectsPathTraversal(t *testing.T) {
 	api := newTestAPI(t)
 	for _, id := range []string{"x/../demo", "../tenants/demo", "./demo", "DEMO"} {
-		code, _, raw := api.do("GET", "/meta/schema", "", "X-Tenant-ID", id)
+		code, _, raw := api.do("GET", "/meta/openapi.json", "", "X-Tenant-ID", id)
 		if code != http.StatusNotFound {
 			t.Errorf("X-Tenant-ID %q: %d %s", id, code, raw)
 		}

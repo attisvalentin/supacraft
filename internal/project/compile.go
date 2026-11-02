@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/attisvalentin/supacraft/internal/envref"
+	"github.com/attisvalentin/supacraft/internal/tenant"
 	"github.com/joho/godotenv"
 )
 
@@ -221,4 +222,23 @@ func asMap(v any) map[string]any {
 func asSlice(v any) []any {
 	s, _ := v.([]any)
 	return s
+}
+
+// TenantConfig is the config the server would load, with "${NAME}"
+// references left unresolved: for describing the project (OpenAPI), not
+// for running it.
+func (p *Project) TenantConfig() (*tenant.TenantConfig, error) {
+	compiled, err := p.compile(nil)
+	if err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(compiled.Payload)
+	if err != nil {
+		return nil, err
+	}
+	var cfg tenant.TenantConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("config does not match the server's types: %w", err)
+	}
+	return &cfg, nil
 }
