@@ -273,6 +273,11 @@ func (v *validator) apiSettings(s map[string]any) {
 	if n, ok := asMap(s["auth"])["password_min_length"].(float64); ok && n > tenant.MaxPasswordBytes {
 		v.errorf("api_settings.auth.password_min_length", "must be at most %d (bcrypt uses only the first %d bytes)", tenant.MaxPasswordBytes, tenant.MaxPasswordBytes)
 	}
+	if val, ok := s["openapi"]; ok && val != nil {
+		if _, isBool := val.(bool); !isBool {
+			v.errorf("api_settings.openapi", "must be true or false")
+		}
+	}
 	if tz, _ := s["timezone"].(string); tz != "" && tz != "UTC" {
 		if tenant.LoadTimezone(tz).String() == "UTC" {
 			v.errorf("api_settings.timezone", "unknown IANA timezone %q", tz)
@@ -362,6 +367,9 @@ func (v *validator) roles(settings, fns map[string]any, authEnabled bool) {
 	// check validates one "roles" list; authKey names the sibling flag that
 	// must not be explicitly false, since roles imply sign-in.
 	check := func(path string, owner map[string]any, authKey string) {
+		if owner[authKey] == true && !authEnabled {
+			v.errorf(path+"."+authKey, "needs auth_enabled: true (without it no request has a token)")
+		}
 		raw, ok := owner["roles"]
 		if !ok || raw == nil {
 			return

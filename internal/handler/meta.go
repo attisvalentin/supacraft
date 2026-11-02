@@ -1,48 +1,27 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 
+	"github.com/attisvalentin/supacraft/internal/config"
 	"github.com/attisvalentin/supacraft/internal/middleware"
-	"github.com/attisvalentin/supacraft/internal/schema"
+	"github.com/attisvalentin/supacraft/internal/openapi"
 )
 
-func HandleMeta(w http.ResponseWriter, r *http.Request) {
-	cfg := middleware.TenantFromContext(r.Context())
-
-	type columnResponse struct {
-		UUID      string `json:"uuid"`
-		Name      string `json:"name"`
-		Type      string `json:"type"`
-		Readable  bool   `json:"readable"`
-		Creatable bool   `json:"creatable"`
-		Updatable bool   `json:"updatable"`
-	}
-
-	type tableResponse struct {
-		UUID    string           `json:"uuid"`
-		Name    string           `json:"name"`
-		Columns []columnResponse `json:"columns"`
-	}
-
-	var tables []tableResponse
-	for _, t := range cfg.Schema.Tables {
-		readable := schema.GetReadableColumns(&t)
-		cols := make([]columnResponse, len(readable))
-		for i, c := range readable {
-			cols[i] = columnResponse{
-				UUID:      c.UUID,
-				Name:      c.Name,
-				Type:      c.Type,
-				Readable:  c.IsReadable(),
-				Creatable: c.IsCreatable(),
-				Updatable: c.IsUpdatable(),
-			}
+// HandleOpenAPI: GET /meta/openapi.json describes the tenant's endpoints:
+// what each accepts and returns, nothing else of the schema. Projects turn
+// it off with api_settings.openapi: false.
+func HandleOpenAPI(serverCfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := middleware.TenantFromContext(r.Context())
+		if !cfg.APISettings.OpenAPIEnabled() {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
 		}
-		tables = append(tables, tableResponse{UUID: t.UUID, Name: t.Name, Columns: cols})
+		opts := openapi.Options{}
+		if serverCfg.Central {
+			opts.TenantHeader = cfg.DBName
+		}
+		writeJSON(w, http.StatusOK, openapi.Build(cfg, opts))
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"data": tables})
 }

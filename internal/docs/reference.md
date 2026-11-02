@@ -194,6 +194,8 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 **`rate_limit`**: Request rate limit per client. `enabled: true` + `requests_per_minute: N` lets each client IP make N requests/minute to the tenant across all endpoints (sliding window), so one noisy client cannot lock out everyone else. Over-limit requests return `429 Too Many Requests`. Omit the block or set `enabled: false` for no limit. Behind a reverse proxy, start the server with `TRUST_PROXY=1` so the limit uses the client address from `X-Real-IP` / `X-Forwarded-For` instead of the proxy's. `/auth/*` is always limited to 20 requests/minute per client IP, whatever this block says.
 
+**`openapi`**: `false` stops serving `GET /meta/openapi.json` (default `true`, see OpenAPI below). The CLI and MCP export work either way.
+
 **`cors`**: Controls which **browser** origins may read responses from the tenant API. Single field `cors.allowed_origin`, a string:
 - `"*"` — allow any origin.
 - One exact origin `scheme://host[:port]` with **no path** (e.g. `"https://app.example.com"`, `"http://localhost:3000"`). The Go API server sends `Access-Control-Allow-Origin` only when the request's `Origin` matches it exactly.
@@ -919,14 +921,10 @@ Response: `{ "data": { "deleted": 1 } }`
 
 ---
 
-### Meta Endpoint
+### OpenAPI
 
-#### GET /meta/schema
-Returns exposed tables and their readable columns. No auth required.
-```bash
-curl http://localhost:8080/meta/schema
-```
-Use this to discover table UUIDs when writing scripts.
+#### GET /meta/openapi.json
+The API as an OpenAPI 3.1 document: the auth, CRUD and file endpoints the project enables and its HTTP functions (not `PRIVATE` ones), with schemas built from the table columns (`readable`/`creatable`/`updatable`, `nullable`, `enum_values`) and each function's `route.input`. It lists only what clients can call — each endpoint's input and response — never other columns or tables. Access rules (`auth`, `roles`) appear as bearer-token security and descriptions. No auth required; set `api_settings.openapi: false` to stop serving it (404). The table schema itself is never served over HTTP. The same document comes from `supacraft openapi -o openapi.json` (`--server-url`, `--central` for a central server's `X-Tenant-ID` header) and the MCP `get_openapi` tool.
 
 ---
 

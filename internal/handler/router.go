@@ -39,7 +39,7 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 			r.Post("/delete", HandleDelete(pool))
 
 			// Meta
-			r.Get("/meta/schema", HandleMeta)
+			r.Get("/meta/openapi.json", HandleOpenAPI(serverCfg))
 
 			// Auth
 			r.Group(func(r chi.Router) {

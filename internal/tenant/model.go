@@ -59,7 +59,15 @@ type SchemaColumn struct {
 	Readable  *bool  `json:"readable,omitempty"`
 	Creatable *bool  `json:"creatable,omitempty"`
 	Updatable *bool  `json:"updatable,omitempty"`
+	// Descriptive properties, used by the OpenAPI export.
+	Primary      bool     `json:"primary,omitempty"`
+	Nullable     *bool    `json:"nullable,omitempty"`
+	DefaultValue any      `json:"default_value,omitempty"`
+	EnumValues   []string `json:"enum_values,omitempty"`
 }
+
+// IsNullable reports whether the column accepts NULL (the default).
+func (c *SchemaColumn) IsNullable() bool { return c.Nullable == nil || *c.Nullable }
 
 func (c *SchemaColumn) IsReadable() bool  { return c.Readable == nil || *c.Readable }
 func (c *SchemaColumn) IsCreatable() bool { return c.Creatable == nil || *c.Creatable }
@@ -297,7 +305,12 @@ type APISettings struct {
 	Timezone      string                         `json:"timezone,omitempty"`
 	RateLimit     RateLimitSettings              `json:"rate_limit,omitempty"`
 	CORS          CORSSettings                   `json:"cors,omitempty"`
+	// OpenAPI serves GET /meta/openapi.json; on unless set to false.
+	OpenAPI *bool `json:"openapi,omitempty"`
 }
+
+// OpenAPIEnabled reports whether GET /meta/openapi.json is served.
+func (a APISettings) OpenAPIEnabled() bool { return a.OpenAPI == nil || *a.OpenAPI }
 
 // CORSSettings controls the Access-Control-Allow-Origin header returned to
 // browser-based frontends. AllowedOrigin is either "*" (any origin) or one
