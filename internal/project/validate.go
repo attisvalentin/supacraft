@@ -62,7 +62,7 @@ var (
 	stepTypes     = setOf("db.select", "db.aggregate", "db.insert", "db.update", "db.delete", "if", "foreach",
 		"transaction", "try", "fail",
 		"set_variable", "transform.sum", "transform.count", "transform.map", "transform.filter",
-		"transform.math", "transform.datetime", "response", "function.call", "http.request", "email.send")
+		"transform.math", "transform.datetime", "response", "function.call", "job.enqueue", "http.request", "email.send")
 	storageDrivers = setOf("local", "s3", "ftp", "sftp", "gcs", "azure")
 )
 
@@ -70,6 +70,7 @@ type validator struct {
 	issues    []Issue
 	tables    map[string]map[string]bool // table → columns
 	functions map[string]bool
+	private   map[string]bool // PRIVATE functions, which jobs may run
 	templates map[string]bool
 	relations []relationEnds
 }
@@ -109,6 +110,7 @@ func (p *Project) Validate() []Issue {
 	v := &validator{
 		tables:    map[string]map[string]bool{},
 		functions: map[string]bool{},
+		private:   map[string]bool{},
 		templates: map[string]bool{},
 	}
 	raw := p.Raw
@@ -129,8 +131,9 @@ func (p *Project) Validate() []Issue {
 	}
 
 	v.schema(asMap(raw["schema"]), p.AuthEnabled())
-	for name := range asMap(raw["functions"]) {
+	for name, f := range asMap(raw["functions"]) {
 		v.functions[name] = true
+		v.private[name] = strings.EqualFold(fmt.Sprint(asMap(asMap(f)["route"])["method"]), "PRIVATE")
 	}
 	settings := asMap(raw["api_settings"])
 	for name := range asMap(asMap(settings["email"])["templates"]) {
@@ -406,10 +409,17 @@ func (v *validator) roles(settings, fns map[string]any, authEnabled bool) {
 	}
 }
 
+// functionNameRe keeps names usable in validation paths, job and
+// function.call references and URLs.
+var functionNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 func (v *validator) functionsSection(fns map[string]any) {
 	routes := map[string]string{}
 	for name, f := range fns {
 		path := "functions." + name
+		if !functionNameRe.MatchString(name) {
+			v.errorf(path, "invalid function name %q (letters, digits, _ and -, at most 64)", name)
+		}
 		fm, ok := f.(map[string]any)
 		if !ok {
 			v.errorf(path, "must be an object")
@@ -635,6 +645,27 @@ func (v *validator) steps(path string, steps []any, scope stepScope) {
 			require("function_id")
 			if id := str("function_id"); id != "" && !v.functions[id] {
 				v.errorf(p+".function_id", "unknown function %q", id)
+			}
+		case "job.enqueue":
+			require("function_id")
+			if id := str("function_id"); id != "" && !v.functions[id] {
+				v.errorf(p+".function_id", "unknown function %q", id)
+			} else if id != "" && !v.private[id] {
+				v.errorf(p+".function_id", "function %q must be PRIVATE (route.method) to run as a job: jobs run without a request or user", id)
+			}
+			if d, set := sm["delay"]; set && d != nil {
+				if n, isNum := d.(float64); isNum {
+					if n < 0 || n != float64(int(n)) || n > pipeline.MaxJobDelay.Seconds() {
+						v.errorf(p+".delay", "must be whole seconds between 0 and 2592000 (30 days)")
+					}
+				} else if s, isStr := d.(string); !isStr || !strings.Contains(s, "{{") {
+					v.errorf(p+".delay", "must be a number of seconds or a {{template}}")
+				}
+			}
+			if m, set := sm["max_attempts"]; set {
+				if n, isNum := m.(float64); !isNum || n < 1 || n > 20 || n != float64(int(n)) {
+					v.errorf(p+".max_attempts", "must be between 1 and 20")
+				}
 			}
 		case "http.request":
 			require("url")

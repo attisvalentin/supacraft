@@ -54,6 +54,9 @@ A deploy sends supacraft.json; secret values stay on the server. After a deploy,
 in production and list_tenants shows every API on the server. Disabling or removing a tenant is the user's call:
 give them "supacraft tenants disable|enable|remove <id>" instead of running it.
 
+Background work: a job.enqueue step runs a PRIVATE function later with retries; get_jobs shows the queue,
+enqueue_job and retry_job act on it.
+
 Roles: api_settings.auth.roles defines them; "roles" on a table method, file endpoint or function route limits
 access. list_users shows who has which role. Change a role only when the user asks: set_user_role makes the user
 approve every change in a prompt (you cannot approve it); otherwise give them "supacraft users set-role <email> <role>".`
@@ -355,6 +358,36 @@ func (s *server) register(srv *mcp.Server) {
 				server = s.opts.APIURL
 			}
 			return jsonResult(openapi.Build(cfg, openapi.Options{ServerURL: server})), nil, nil
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_jobs", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List background jobs (queued by job.enqueue steps), newest first: function, args, status (pending, running, done, failed), attempts and the last error. Local project by default, the central server (SUPACRAFT_SERVER) with server: true; status filters."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Server bool   `json:"server,omitempty"`
+			Status string `json:"status,omitempty" jsonschema:"pending | running | done | failed; omit for all"`
+			Limit  int    `json:"limit,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			if in.Limit <= 0 {
+				in.Limit = 50
+			}
+			return s.listJobs(ctx, in.Server, in.Status, in.Limit)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "enqueue_job", Description: "Queue a PRIVATE function to run as a background job with args (as a job.enqueue step would), e.g. to try a job function or redo work. Local project directly; on the central server (server: true) only after the user approves it in a prompt you cannot answer."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Function string         `json:"function"`
+			Args     map[string]any `json:"args,omitempty"`
+			Delay    int            `json:"delay,omitempty" jsonschema:"seconds to wait, 0-2592000"`
+			Server   bool           `json:"server,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.enqueueJob(ctx, req, in.Server, in.Function, in.Args, in.Delay)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "retry_job", Description: "Queue a failed job (see get_jobs) again with fresh attempts. Local project directly; on the central server (server: true) only after the user approves it in a prompt you cannot answer."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			ID     string `json:"id"`
+			Server bool   `json:"server,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.retryJob(ctx, req, in.Server, in.ID)
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_users", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List the project's users with their role (api_settings.auth.roles), active and verified status. Reads the local project's database, or the central server's (SUPACRAFT_SERVER) with server: true. Never returns password hashes."},

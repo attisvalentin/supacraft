@@ -14,6 +14,7 @@ import (
 	"github.com/attisvalentin/supacraft/internal/cronjob"
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/handler"
+	"github.com/attisvalentin/supacraft/internal/jobs"
 	"github.com/attisvalentin/supacraft/internal/tenant"
 )
 
@@ -91,6 +92,10 @@ func Start(ctx context.Context, cfg *config.Config, withCron bool) (*Server, <-c
 	if withCron && !cfg.DisableCron {
 		crons = cronjob.NewCronManager(cached, pools)
 		crons.Start(ctx)
+		// Background jobs run where cron runs.
+		worker := jobs.NewWorker(cached, pools, func(id string) bool { return tenant.Serving(cfg.DataDir, id) })
+		tenant.JobsEnqueued = worker.Notify
+		worker.Start(ctx)
 	}
 
 	done := make(chan error, 1)

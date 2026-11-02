@@ -32,7 +32,10 @@ type Test struct {
 	// HTTPMocks answers http.request steps by URL prefix; a call that
 	// matches none fails the test instead of reaching the network.
 	HTTPMocks map[string]HTTPMock `json:"http_mocks,omitempty"`
-	Expect    Expect              `json:"expect"`
+	// RunJobs runs the jobs the request queued (and those they queue),
+	// ignoring their delay, before the expectations are checked.
+	RunJobs bool   `json:"run_jobs,omitempty"`
+	Expect  Expect `json:"expect"`
 }
 
 // HTTPMock is a canned response to an http.request step.
@@ -50,6 +53,9 @@ type Expect struct {
 	DB     map[string]DBExpect `json:"db,omitempty"`
 	// Emails is how many emails the request sent (captured, never sent).
 	Emails *int `json:"emails,omitempty"`
+	// Jobs are the queued jobs in order, each matched like Body against
+	// {function, args, status, attempts, last_error}.
+	Jobs []any `json:"jobs,omitempty"`
 }
 
 // DBExpect counts the rows of a table matching Where after the request.
@@ -247,6 +253,17 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 		if s, set := expect["status"]; set {
 			if n, isNum := s.(float64); !isNum || n < 100 || n > 599 || n != float64(int(n)) {
 				v.errorf(path+".expect.status", "must be an HTTP status code")
+			}
+		}
+		if js, set := expect["jobs"]; set && js != nil {
+			list, isList := js.([]any)
+			if !isList {
+				v.errorf(path+".expect.jobs", "must be a list of jobs ({function, args?, status?})")
+			}
+			for i, j := range list {
+				if fn, _ := asMap(j)["function"].(string); fn != "" && !v.functions[fn] {
+					v.errorf(fmt.Sprintf("%s.expect.jobs[%d].function", path, i), "unknown function %q", fn)
+				}
 			}
 		}
 		if n, set := expect["emails"]; set {
