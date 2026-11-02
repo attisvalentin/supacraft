@@ -118,7 +118,7 @@ func (p *Project) Validate() []Issue {
 	} else if id := p.TenantID(); len(id) > MaxTenantIDLength {
 		v.errorf("name", "too long: its id %q must be at most %d characters", id, MaxTenantIDLength)
 	}
-	for _, key := range []string{"schema", "api_settings", "functions", "cronjobs"} {
+	for _, key := range []string{"schema", "api_settings", "functions", "cronjobs", "seed", "tests"} {
 		if val, ok := raw[key]; ok && val != nil {
 			if _, isMap := val.(map[string]any); !isMap {
 				if arr, isArr := val.([]any); !(isArr && len(arr) == 0) {
@@ -141,6 +141,7 @@ func (p *Project) Validate() []Issue {
 	v.roles(settings, asMap(raw["functions"]), p.AuthEnabled())
 	v.functionsSection(asMap(raw["functions"]))
 	v.cronjobs(asMap(raw["cronjobs"]))
+	v.seedAndTests(raw, p.AuthEnabled())
 
 	if !HasErrors(v.issues) {
 		v.decodes(p)

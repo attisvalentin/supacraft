@@ -8,6 +8,7 @@ import (
 
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/middleware"
+	"github.com/attisvalentin/supacraft/internal/pipeline"
 	"github.com/attisvalentin/supacraft/internal/query"
 	"github.com/attisvalentin/supacraft/internal/schema"
 	"github.com/attisvalentin/supacraft/internal/tenant"
@@ -238,7 +239,9 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 // ("insert failed: <driver error>" → "insert failed"), so database and
 // filesystem details stay in the error log instead of reaching clients.
 func writeErrorJSON(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	if errorlog.Global != nil {
+	if sb := pipeline.SandboxFrom(r.Context()); sb != nil && sb.Errors != nil {
+		sb.Errors(msg)
+	} else if errorlog.Global != nil {
 		errorlog.Global.Log(r.Header.Get("X-Tenant-ID"), r.Method, r.URL.Path, status, msg)
 	}
 	if i := strings.Index(msg, ": "); i > 0 {

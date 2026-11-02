@@ -108,7 +108,9 @@ func ExecuteEmailSend(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipe
 	}
 
 	mailer := deps.Mailer
-	if mailer == nil {
+	if sb := SandboxFrom(ctx); sb != nil {
+		mailer = sb.Mailer
+	} else if mailer == nil {
 		mailer = NewSMTPMailer()
 	}
 

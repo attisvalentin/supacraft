@@ -41,6 +41,10 @@ type ApplyOptions struct {
 	RequireSecrets bool
 	// DryRun validates and plans the migration without changing anything.
 	DryRun bool
+	// ProjectEnv resolves "${NAME}" references from the project's .env, as
+	// a local apply does: for a throwaway directory (supacraft test), not
+	// a central server.
+	ProjectEnv bool
 }
 
 // MissingSecretsError lists the secrets a central apply still needs.
@@ -82,7 +86,7 @@ func (p *Project) ApplyTo(ctx context.Context, dataDir string, opts ApplyOptions
 	}
 	var err error
 	var compiled *Compiled
-	if own {
+	if own || opts.ProjectEnv {
 		compiled, err = p.Compile()
 	} else {
 		// A central server keeps "${NAME}" references and resolves them from
