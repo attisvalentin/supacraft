@@ -52,12 +52,18 @@ type Function struct {
 	Steps             []FunctionStep `json:"steps"`
 }
 
+// NeedsAuth reports whether the route requires a signed-in user.
+func (r FunctionRoute) NeedsAuth() bool { return r.AuthRequired || len(r.Roles) > 0 }
+
 // FunctionRoute defines the HTTP route for a pipeline function.
 type FunctionRoute struct {
-	Path         string    `json:"path"`
-	Method       string    `json:"method"`
-	AuthRequired bool      `json:"auth_required"`
-	URLParams    StringMap `json:"url_params,omitempty"`
+	Path         string `json:"path"`
+	Method       string `json:"method"`
+	AuthRequired bool   `json:"auth_required"`
+	// Roles limits the function to users with one of these roles (implies
+	// auth_required).
+	Roles     []string  `json:"roles,omitempty"`
+	URLParams StringMap `json:"url_params,omitempty"`
 	// Input declares the accepted request fields: the JSON body, or the query
 	// string for GET. Requests that don't match get a 400 before any step runs.
 	Input map[string]InputField `json:"input,omitempty"`

@@ -94,3 +94,27 @@ func TestFunctionStep_UnmarshalEmailSendStep(t *testing.T) {
 		t.Fatalf("unexpected to: %#v", step.To)
 	}
 }
+
+func TestAuthSettings_EffectiveRole(t *testing.T) {
+	str := func(s string) *string { return &s }
+	a := AuthSettings{Roles: []string{"user", "admin"}}
+	cases := []struct {
+		stored *string
+		want   string
+	}{
+		{nil, "user"}, // NULL: the default (first) role
+		{str("admin"), "admin"},
+		{str("gone"), ""}, // removed from the config: no role
+	}
+	for _, c := range cases {
+		if got := a.EffectiveRole(c.stored); got != c.want {
+			t.Errorf("EffectiveRole(%v) = %q, want %q", c.stored, got, c.want)
+		}
+	}
+	if got := (AuthSettings{}).EffectiveRole(str("admin")); got != "" {
+		t.Errorf("roles disabled: got %q", got)
+	}
+	if RoleAllowed([]string{"admin"}, "") || !RoleAllowed(nil, "") || !RoleAllowed([]string{"user", "admin"}, "admin") {
+		t.Error("RoleAllowed")
+	}
+}

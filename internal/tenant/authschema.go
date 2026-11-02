@@ -21,7 +21,12 @@ var AuthTokensDDL = []string{
 
 // authColumns are the built-in users columns the auth handlers query that
 // the first users table didn't have (project.authUserColumns declares them).
-var authColumns = []string{"is_active", "email_verified", "session_version"}
+var authColumns = []struct{ name, sqlType string }{
+	{"is_active", "INTEGER"},
+	{"email_verified", "INTEGER"},
+	{"session_version", "INTEGER"},
+	{"role", "TEXT"},
+}
 
 // ensureAuthSchema adds what the auth handlers need to a database applied
 // by an older version, so a server upgrade works before the next deploy.
@@ -45,9 +50,9 @@ func ensureAuthSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	for _, col := range authColumns {
-		if !have[col] {
-			if _, err := db.ExecContext(ctx, `ALTER TABLE "users" ADD COLUMN "`+col+`" INTEGER`); err != nil {
-				return fmt.Errorf("add users.%s: %w", col, err)
+		if !have[col.name] {
+			if _, err := db.ExecContext(ctx, `ALTER TABLE "users" ADD COLUMN "`+col.name+`" `+col.sqlType); err != nil {
+				return fmt.Errorf("add users.%s: %w", col.name, err)
 			}
 		}
 	}

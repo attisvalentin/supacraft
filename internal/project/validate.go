@@ -138,6 +138,7 @@ func (p *Project) Validate() []Issue {
 	}
 	v.apiSettings(settings)
 	v.authEmails(asMap(settings["auth"]), asMap(asMap(settings["email"])["smtp"]), p.AuthEnabled())
+	v.roles(settings, asMap(raw["functions"]), p.AuthEnabled())
 	v.functionsSection(asMap(raw["functions"]))
 	v.cronjobs(asMap(raw["cronjobs"]))
 
@@ -212,7 +213,8 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 			if strings.EqualFold(ctype, "enum") && len(asSlice(cm["enum_values"])) == 0 {
 				v.errorf(cpath+".enum_values", "enum column %q needs enum_values", cname)
 			}
-			if authEnabled && name == "users" && privilegedColumn.MatchString(cname) {
+			// users.role is built in and never client-settable.
+			if authEnabled && name == "users" && cname != "role" && privilegedColumn.MatchString(cname) {
 				if c, set := cm["creatable"].(bool); !set || c {
 					v.warnf(cpath+".creatable", "users.%s looks like a permission; anyone can set it at /auth/register unless it has \"creatable\": false", cname)
 				}
@@ -317,6 +319,78 @@ func (v *validator) authEmails(auth, smtp map[string]any, authEnabled bool) {
 		if key == "password_reset" && flow["required"] != nil {
 			v.errorf(path+".required", "only applies to email_verification")
 		}
+	}
+}
+
+// roleNameRe is a role name: it is matched exactly at runtime and shown
+// in CLI output, so keep it simple.
+var roleNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+// roles checks api_settings.auth.roles and default_role, and every "roles"
+// list restricting a table method, file endpoint or function to them.
+func (v *validator) roles(settings, fns map[string]any, authEnabled bool) {
+	auth := asMap(settings["auth"])
+	defined := map[string]bool{}
+	if raw, ok := auth["roles"]; ok && raw != nil {
+		list, isList := raw.([]any)
+		switch {
+		case !isList:
+			v.errorf("api_settings.auth.roles", "must be a list of role names")
+		case !authEnabled && len(list) > 0:
+			v.errorf("api_settings.auth.roles", "needs auth_enabled: true")
+		}
+		for _, r := range list {
+			name, _ := r.(string)
+			switch {
+			case !roleNameRe.MatchString(name):
+				v.errorf("api_settings.auth.roles", "invalid role name %q (lowercase letters, digits and _, starting with a letter, at most 32)", r)
+			case defined[name]:
+				v.errorf("api_settings.auth.roles", "duplicate role %q", name)
+			}
+			defined[name] = true
+		}
+	}
+	if raw, ok := auth["default_role"]; ok && raw != nil {
+		if name, _ := raw.(string); !defined[name] {
+			v.errorf("api_settings.auth.default_role", "must be one of api_settings.auth.roles")
+		}
+	}
+
+	// check validates one "roles" list; authKey names the sibling flag that
+	// must not be explicitly false, since roles imply sign-in.
+	check := func(path string, owner map[string]any, authKey string) {
+		raw, ok := owner["roles"]
+		if !ok || raw == nil {
+			return
+		}
+		list, isList := raw.([]any)
+		if !isList || len(list) == 0 {
+			v.errorf(path+".roles", "must list at least one role (remove it to allow every user)")
+			return
+		}
+		if len(defined) == 0 {
+			v.errorf(path+".roles", "needs api_settings.auth.roles to define the roles")
+			return
+		}
+		for _, r := range list {
+			if name, _ := r.(string); !defined[name] {
+				v.errorf(path+".roles", "unknown role %v (defined: %s)", r, keys(defined))
+			}
+		}
+		if owner[authKey] == false {
+			v.errorf(path+"."+authKey, "must not be false when roles are set: roles require a signed-in user")
+		}
+	}
+	for table, ms := range asMap(settings["tables"]) {
+		for _, method := range []string{"query", "create", "update", "delete"} {
+			check("api_settings.tables."+table+"."+method, asMap(asMap(ms)[method]), "auth")
+		}
+	}
+	for _, ep := range []string{"upload", "download", "delete"} {
+		check("api_settings.file_endpoints."+ep, asMap(asMap(settings["file_endpoints"])[ep]), "auth")
+	}
+	for name, f := range fns {
+		check("functions."+name+".route", asMap(asMap(f)["route"]), "auth_required")
 	}
 }
 

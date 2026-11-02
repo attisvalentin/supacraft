@@ -24,15 +24,9 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		// Auth check
-		var claims *tenant.AuthClaims
-		if matchedFunc.Route.AuthRequired {
-			var err error
-			claims, err = validateJWT(r, cfg, pool)
-			if err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		claims, ok := authorize(w, r, cfg, pool, matchedFunc.Route.AuthRequired, matchedFunc.Route.Roles)
+		if !ok {
+			return
 		}
 
 		// Get DB pool
@@ -52,6 +46,7 @@ func HandleFunction(pool *tenant.PoolManager) http.HandlerFunc {
 			pCtx.Set("auth", map[string]any{
 				"user_id": claims.UserID,
 				"email":   claims.Email,
+				"role":    claims.Role,
 			})
 		}
 

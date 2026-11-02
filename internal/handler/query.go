@@ -45,14 +45,9 @@ func HandleQuery(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		var claims *tenant.AuthClaims
-		if tableSettings.Query.Auth {
-			var err error
-			claims, err = validateJWT(r, cfg, pool)
-			if err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		claims, ok := authorize(w, r, cfg, pool, tableSettings.Query.Auth, tableSettings.Query.Roles)
+		if !ok {
+			return
 		}
 
 		table, err := schema.FindTable(&cfg.Schema, req.TableID)
@@ -168,12 +163,17 @@ func HandleQuery(pool *tenant.PoolManager) http.HandlerFunc {
 			if !ok || !settings.Query.Enabled {
 				return "", nil, query.ErrIncludeForbidden
 			}
-			if settings.Query.Auth && claims == nil {
-				c, err := validateJWT(r, cfg, pool)
-				if err != nil {
+			if settings.Query.NeedsAuth() {
+				if claims == nil {
+					c, err := validateJWT(r, cfg, pool)
+					if err != nil {
+						return "", nil, query.ErrIncludeForbidden
+					}
+					claims = c
+				}
+				if !tenant.RoleAllowed(settings.Query.Roles, claims.Role) {
 					return "", nil, query.ErrIncludeForbidden
 				}
-				claims = c
 			}
 			return query.BuildRowPolicy(settings.Query.RowPolicy, claims, 0)
 		}

@@ -222,6 +222,8 @@ type tenantsTargetInfo struct {
 	project string // tenant id of the project in the current directory, if any
 }
 
+var errNoTarget = errors.New("pass --server <url> (or set SUPACRAFT_SERVER), or --data-dir on the server itself")
+
 // tenantsTarget picks --server, then --data-dir (or SUPACRAFT_DATA_DIR), then
 // SUPACRAFT_SERVER from the environment or the project's .env.
 func tenantsTarget() (*tenantsTargetInfo, error) {
@@ -249,7 +251,7 @@ func tenantsTarget() (*tenantsTargetInfo, error) {
 	}
 	server := firstNonEmpty(tenantsServer, lookup("SUPACRAFT_SERVER"))
 	if server == "" {
-		return nil, errors.New("pass --server <url> (or set SUPACRAFT_SERVER), or --data-dir on the server itself")
+		return nil, errNoTarget
 	}
 	c, err := remote.New(server, lookup("SUPACRAFT_ADMIN_SECRET"))
 	if err != nil {

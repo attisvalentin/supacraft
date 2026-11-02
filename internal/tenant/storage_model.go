@@ -13,6 +13,9 @@ type StorageConfig struct {
 type FileEndpointSettings struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	Auth    *bool `json:"auth,omitempty"`
+	// Roles limits the endpoint to users with one of these roles (implies
+	// auth).
+	Roles []string `json:"roles,omitempty"`
 }
 
 func (f FileEndpointSettings) IsEnabled() bool {
@@ -20,7 +23,7 @@ func (f FileEndpointSettings) IsEnabled() bool {
 }
 
 func (f FileEndpointSettings) AuthRequired() bool {
-	return f.Auth != nil && *f.Auth
+	return (f.Auth != nil && *f.Auth) || len(f.Roles) > 0
 }
 
 // FileEndpoints controls per-route toggles for file operations.

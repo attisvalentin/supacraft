@@ -34,11 +34,8 @@ func HandleFileUpload(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			return
 		}
 
-		if cfg.APISettings.FileEndpoints.Upload.AuthRequired() {
-			if _, err := validateJWT(r, cfg, pool); err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		if _, ok := authorize(w, r, cfg, pool, cfg.APISettings.FileEndpoints.Upload.AuthRequired(), cfg.APISettings.FileEndpoints.Upload.Roles); !ok {
+			return
 		}
 
 		if cfg.APISettings.Storage == nil || cfg.APISettings.Storage.Driver == "" {
@@ -180,11 +177,8 @@ func HandleFileDownload(pool *tenant.PoolManager, serverCfg *config.Config) http
 			return
 		}
 
-		if cfg.APISettings.FileEndpoints.Download.AuthRequired() {
-			if _, err := validateJWT(r, cfg, pool); err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		if _, ok := authorize(w, r, cfg, pool, cfg.APISettings.FileEndpoints.Download.AuthRequired(), cfg.APISettings.FileEndpoints.Download.Roles); !ok {
+			return
 		}
 
 		if cfg.APISettings.Storage == nil || cfg.APISettings.Storage.Driver == "" {
@@ -249,11 +243,8 @@ func HandleFileDelete(pool *tenant.PoolManager, serverCfg *config.Config) http.H
 			return
 		}
 
-		if cfg.APISettings.FileEndpoints.Delete.AuthRequired() {
-			if _, err := validateJWT(r, cfg, pool); err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		if _, ok := authorize(w, r, cfg, pool, cfg.APISettings.FileEndpoints.Delete.AuthRequired(), cfg.APISettings.FileEndpoints.Delete.Roles); !ok {
+			return
 		}
 
 		if cfg.APISettings.Storage == nil || cfg.APISettings.Storage.Driver == "" {

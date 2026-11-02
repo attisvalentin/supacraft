@@ -37,14 +37,9 @@ func HandleDelete(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		var claims *tenant.AuthClaims
-		if tableSettings.Delete.Auth {
-			var err error
-			claims, err = validateJWT(r, cfg, pool)
-			if err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
+		claims, ok := authorize(w, r, cfg, pool, tableSettings.Delete.Auth, tableSettings.Delete.Roles)
+		if !ok {
+			return
 		}
 
 		table, err := schema.FindTable(&cfg.Schema, req.TableID)

@@ -211,7 +211,7 @@ func TestValidate_SecurityLimits(t *testing.T) {
 
 func TestValidate_WarnsAboutPrivilegedUsersColumns(t *testing.T) {
 	p := load(t, `{"name": "x", "auth_enabled": true, "schema": {"tables": [{"name": "users", "columns": [
-    {"name": "role", "type": "varchar", "creatable": false}]}]}}`)
+    {"name": "plan", "type": "varchar", "creatable": false}]}]}}`)
 	var warned bool
 	for _, i := range p.Validate() {
 		if i.Severity == "warning" && i.Path == "schema.tables[0].columns[0].updatable" {
@@ -219,7 +219,7 @@ func TestValidate_WarnsAboutPrivilegedUsersColumns(t *testing.T) {
 		}
 	}
 	if !warned {
-		t.Error("no warning for updatable users.role")
+		t.Error("no warning for updatable users.plan")
 	}
 }
 
@@ -389,5 +389,54 @@ func TestValidate_AuthEmailFlows(t *testing.T) {
 		if strings.HasPrefix(path, "api_settings.auth.password_reset") {
 			t.Errorf("valid password_reset rejected: %s", path)
 		}
+	}
+}
+
+func TestValidate_Roles(t *testing.T) {
+	p := load(t, `{"name": "x", "auth_enabled": true,
+	  "schema": {"tables": [{"name": "posts", "columns": [{"name": "id", "type": "uuid", "primary": true}]}]},
+	  "api_settings": {
+	    "auth": {"roles": ["user", "Admin", "user"], "default_role": "owner"},
+	    "tables": {"posts": {
+	      "query": {"enabled": true, "roles": ["user"]},
+	      "create": {"enabled": true, "roles": ["ghost"]},
+	      "update": {"enabled": true, "auth": false, "roles": ["user"]},
+	      "delete": {"enabled": true, "roles": []}}},
+	    "file_endpoints": {"upload": {"roles": ["user"]}}},
+	  "functions": {"f": {"route": {"path": "/fn/f", "method": "GET", "roles": ["nope"]}, "steps": [{"type": "response", "data": {}}]}}}`)
+	got := map[string]int{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path]++
+		}
+	}
+	want := map[string]int{
+		"api_settings.auth.roles":                2, // "Admin" is invalid, "user" repeats
+		"api_settings.auth.default_role":         1,
+		"api_settings.tables.posts.create.roles": 1,
+		"api_settings.tables.posts.update.auth":  1,
+		"api_settings.tables.posts.delete.roles": 1,
+		"functions.f.route.roles":                1,
+	}
+	for path, n := range want {
+		if got[path] != n {
+			t.Errorf("%s: %d errors, want %d (all: %v)", path, got[path], n, got)
+		}
+	}
+	for _, ok := range []string{"api_settings.tables.posts.query.roles", "api_settings.file_endpoints.upload.roles"} {
+		if got[ok] > 0 {
+			t.Errorf("valid roles rejected at %s", ok)
+		}
+	}
+
+	// Roles need auth; routes need defined roles.
+	p = load(t, `{"name": "x", "api_settings": {"auth": {"roles": ["user"]}},
+	  "functions": {"f": {"route": {"path": "/fn/f", "method": "GET", "roles": ["user"]}, "steps": [{"type": "response", "data": {}}]}}}`)
+	got = map[string]int{}
+	for _, i := range p.Validate() {
+		got[i.Path]++
+	}
+	if got["api_settings.auth.roles"] == 0 {
+		t.Errorf("roles without auth_enabled accepted: %v", got)
 	}
 }

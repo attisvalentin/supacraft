@@ -2,13 +2,16 @@ package query
 
 import (
 	"fmt"
-	"strings"
+	"regexp"
 
 	"github.com/attisvalentin/supacraft/internal/tenant"
 )
 
+var rowPolicyVar = regexp.MustCompile(`\$auth\.(id|email|role)\b`)
+
 // BuildRowPolicy takes a row_policy expression (e.g. "user_id = $auth.id") and
-// replaces $auth.* variables with `?` placeholders. paramOffset is unused for
+// replaces each $auth.id, $auth.email and $auth.role with a `?` placeholder,
+// returning the values in the order they appear. paramOffset is unused for
 // SQLite (positional `?`) but kept in the signature for API parity.
 func BuildRowPolicy(expression string, claims *tenant.AuthClaims, paramOffset int) (string, []any, error) {
 	if expression == "" {
@@ -17,23 +20,26 @@ func BuildRowPolicy(expression string, claims *tenant.AuthClaims, paramOffset in
 	_ = paramOffset
 
 	var args []any
-	result := expression
-
-	if strings.Contains(result, "$auth.id") {
+	var missing string
+	result := rowPolicyVar.ReplaceAllStringFunc(expression, func(v string) string {
 		if claims == nil {
-			return "", nil, fmt.Errorf("row_policy references $auth.id but no authenticated user")
+			if missing == "" {
+				missing = v
+			}
+			return v
 		}
-		result = strings.ReplaceAll(result, "$auth.id", "?")
-		args = append(args, claims.UserID)
-	}
-
-	if strings.Contains(result, "$auth.email") {
-		if claims == nil {
-			return "", nil, fmt.Errorf("row_policy references $auth.email but no authenticated user")
+		switch v {
+		case "$auth.id":
+			args = append(args, claims.UserID)
+		case "$auth.email":
+			args = append(args, claims.Email)
+		case "$auth.role":
+			args = append(args, claims.Role)
 		}
-		result = strings.ReplaceAll(result, "$auth.email", "?")
-		args = append(args, claims.Email)
+		return "?"
+	})
+	if missing != "" {
+		return "", nil, fmt.Errorf("row_policy references %s but no authenticated user", missing)
 	}
-
 	return result, args, nil
 }

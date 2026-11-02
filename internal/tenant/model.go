@@ -68,6 +68,9 @@ func (c *SchemaColumn) IsUpdatable() bool { return c.Updatable == nil || *c.Upda
 type AuthClaims struct {
 	UserID string
 	Email  string
+	// Role is read from the users table on every request, so a role
+	// change applies to tokens already issued. "" when roles are off.
+	Role string
 }
 
 type Relation struct {
@@ -119,6 +122,65 @@ type AuthSettings struct {
 	// /auth/resend-verification and mails a link on register.
 	PasswordReset     *AuthEmailFlow `json:"password_reset,omitempty"`
 	EmailVerification *AuthEmailFlow `json:"email_verification,omitempty"`
+	// Roles lists the roles a user can have; routes restrict access with
+	// their own "roles". New users get DefaultRole (the first role when
+	// unset). Empty disables roles.
+	Roles       []string `json:"roles,omitempty"`
+	DefaultRole string   `json:"default_role,omitempty"`
+}
+
+// RolesEnabled reports whether the project defines roles.
+func (a AuthSettings) RolesEnabled() bool { return len(a.Roles) > 0 }
+
+// DefaultRoleName is the role of a new user (and of one whose role is
+// NULL); "" when roles are disabled.
+func (a AuthSettings) DefaultRoleName() string {
+	if a.DefaultRole != "" {
+		return a.DefaultRole
+	}
+	if len(a.Roles) > 0 {
+		return a.Roles[0]
+	}
+	return ""
+}
+
+// HasRole reports whether role is one of the configured roles.
+func (a AuthSettings) HasRole(role string) bool {
+	for _, r := range a.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveRole maps a stored users.role value to the user's role: NULL
+// means the default role, and a role no longer configured means none.
+func (a AuthSettings) EffectiveRole(stored *string) string {
+	if !a.RolesEnabled() {
+		return ""
+	}
+	if stored == nil || *stored == "" {
+		return a.DefaultRoleName()
+	}
+	if a.HasRole(*stored) {
+		return *stored
+	}
+	return ""
+}
+
+// RoleAllowed reports whether role may use a route restricted to allowed
+// (an empty list allows everyone).
+func RoleAllowed(allowed []string, role string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, r := range allowed {
+		if r == role && role != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // AuthEmailFlow mails a one-time link: Template (from email.templates)
@@ -297,7 +359,13 @@ type MethodSettings struct {
 	Enabled   bool   `json:"enabled"`
 	Auth      bool   `json:"auth"`
 	RowPolicy string `json:"row_policy,omitempty"`
+	// Roles limits the method to users with one of these roles (implies
+	// auth).
+	Roles []string `json:"roles,omitempty"`
 }
+
+// NeedsAuth reports whether the method requires a signed-in user.
+func (m MethodSettings) NeedsAuth() bool { return m.Auth || len(m.Roles) > 0 }
 
 type TenantConfig struct {
 	DBName      string              `json:"db_name"`
