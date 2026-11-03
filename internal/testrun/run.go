@@ -182,7 +182,7 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 	}
 
 	rec := httptest.NewRecorder()
-	handler.NewRouter(tenant.NewCachedStore(store), pools, errLog, cfg).ServeHTTP(rec, req)
+	handler.NewRouter(tenant.NewCachedStore(store), pools, errLog, cfg, nil).ServeHTTP(rec, req)
 	res.Status = rec.Code
 
 	if t.RunJobs {

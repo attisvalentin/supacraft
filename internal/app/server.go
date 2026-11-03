@@ -15,6 +15,7 @@ import (
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/handler"
 	"github.com/attisvalentin/supacraft/internal/jobs"
+	"github.com/attisvalentin/supacraft/internal/realtime"
 	"github.com/attisvalentin/supacraft/internal/tenant"
 )
 
@@ -80,8 +81,10 @@ func Start(ctx context.Context, cfg *config.Config, withCron bool) (*Server, <-c
 		errLog.Close()
 		return nil, nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
+	hub := realtime.NewHub(cached, pools)
+	tenant.ChangesRecorded = hub.Notify
 	srv := &http.Server{
-		Handler: handler.NewRouter(cached, pools, errLog, cfg),
+		Handler: handler.NewRouter(cached, pools, errLog, cfg, hub),
 		// Slow clients must not hold connections open indefinitely. There is
 		// no overall ReadTimeout because large uploads legitimately take time.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -112,10 +115,13 @@ func Start(ctx context.Context, cfg *config.Config, withCron bool) (*Server, <-c
 		select {
 		case <-ctx.Done():
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			// Shutdown doesn't track WebSockets; the hub closes them.
+			hub.Close()
 			srv.Shutdown(shutdownCtx)
 			cancel()
 			err = <-done
 		case err = <-done:
+			hub.Close()
 		}
 		if crons != nil {
 			<-crons.Stop().Done()

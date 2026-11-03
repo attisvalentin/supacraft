@@ -279,6 +279,7 @@ func (v *validator) apiSettings(s map[string]any) {
 		v.errorf("api_settings.auth.password_min_length", "must be at most %d (bcrypt uses only the first %d bytes)", tenant.MaxPasswordBytes, tenant.MaxPasswordBytes)
 	}
 	v.webhooks(asMap(s["webhooks"]))
+	v.realtime(s)
 	if val, ok := s["openapi"]; ok && val != nil {
 		if _, isBool := val.(bool); !isBool {
 			v.errorf("api_settings.openapi", "must be true or false")
@@ -418,6 +419,41 @@ func (v *validator) oauth(raw any, authEnabled bool) {
 var webhookOps = setOf("insert", "update", "delete", "*")
 
 // webhooks checks api_settings.webhooks.
+// realtime checks api_settings.realtime: each streamed table exists and
+// has query enabled, whose access rules decide what subscribers get.
+func (v *validator) realtime(s map[string]any) {
+	raw, set := s["realtime"]
+	if !set || raw == nil {
+		return
+	}
+	rt, ok := raw.(map[string]any)
+	if !ok {
+		v.errorf("api_settings.realtime", "must be an object {tables: [...]}")
+		return
+	}
+	tables, ok := rt["tables"].([]any)
+	if !ok {
+		v.errorf("api_settings.realtime.tables", "must list the tables whose changes are streamed")
+		return
+	}
+	seen := map[string]bool{}
+	for i, t := range tables {
+		path := fmt.Sprintf("api_settings.realtime.tables[%d]", i)
+		name, _ := t.(string)
+		switch {
+		case v.tables[name] == nil:
+			v.errorf(path, "unknown table %v", t)
+		case seen[name]:
+			v.errorf(path, "%s is listed twice", name)
+		default:
+			if enabled, _ := asMap(asMap(asMap(s["tables"])[name])["query"])["enabled"].(bool); !enabled {
+				v.errorf(path, "%s needs api_settings.tables.%s.query.enabled: subscribers get the rows query would return", name, name)
+			}
+		}
+		seen[name] = true
+	}
+}
+
 func (v *validator) webhooks(hooks map[string]any) {
 	for name, h := range hooks {
 		path := "api_settings.webhooks." + name

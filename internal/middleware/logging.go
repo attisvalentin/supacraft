@@ -38,3 +38,7 @@ func (ww *wrappedWriter) WriteHeader(code int) {
 	ww.statusCode = code
 	ww.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.ResponseController and WebSocket upgrades reach the
+// underlying writer (Hijack, Flush).
+func (ww *wrappedWriter) Unwrap() http.ResponseWriter { return ww.ResponseWriter }

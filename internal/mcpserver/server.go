@@ -62,6 +62,9 @@ Background work: a job.enqueue step runs a PRIVATE function later with retries; 
 enqueue_job and retry_job act on it. api_settings.webhooks POST table changes to other systems through the same
 queue (signed, retried); test them with expect.webhooks and run_jobs + http_mocks.
 
+Realtime: api_settings.realtime.tables streams those tables' changes over a WebSocket (GET /realtime); each
+subscriber gets the rows its table's query rules (auth, roles, row_policy) allow. get_changes reads the change log.
+
 Sign-in with Google, GitHub or any OpenID Connect provider: api_settings.auth.oauth (see the reference). Client
 secrets are "${NAME}" references the user sets; tell them which callback URL to register at the provider.
 
@@ -372,6 +375,20 @@ func (s *server) register(srv *mcp.Server) {
 				in.Limit = 50
 			}
 			return s.listJobs(ctx, in.Server, in.Status, in.Limit)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_changes", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Read the realtime change log: the inserted, updated and deleted rows of the api_settings.realtime tables (readable columns, oldest first, kept 15 minutes) that /realtime subscribers receive, plus last_seq. Pass since (a seq) to get only newer ones; limit 0 returns just last_seq. Local project by default, the central server with server: true."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Server bool   `json:"server,omitempty"`
+			Table  string `json:"table,omitempty" jsonschema:"only this table's changes"`
+			Since  int64  `json:"since,omitempty" jsonschema:"only changes after this seq"`
+			Limit  *int   `json:"limit,omitempty" jsonschema:"at most 500; default 100"`
+		}) (*mcp.CallToolResult, any, error) {
+			limit := 100
+			if in.Limit != nil {
+				limit = *in.Limit
+			}
+			return s.getChanges(ctx, in.Server, in.Table, in.Since, limit)
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "enqueue_job", Description: "Queue a PRIVATE function to run as a background job with args (as a job.enqueue step would), e.g. to try a job function or redo work. Local project directly; on the central server (server: true) only after the user approves it in a prompt you cannot answer."},

@@ -103,7 +103,7 @@ func writeTestTenant(dataDir, id, cfg string) error {
 }
 
 // A change whose delivery can't be queued is rolled back with it.
-func TestWriteWithWebhooks_Atomic(t *testing.T) {
+func TestWriteWithChanges_Atomic(t *testing.T) {
 	ctx := context.Background()
 	sqlDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "a.db"))
 	if err != nil {
@@ -128,14 +128,14 @@ func TestWriteWithWebhooks_Atomic(t *testing.T) {
 		}
 	}
 	// A value JSON can't encode makes queueing fail.
-	if _, err := WriteWithWebhooks(ctx, db, cfg, "orders", OpInsert, write(make(chan int))); err == nil {
+	if _, err := WriteWithChanges(ctx, db, cfg, "orders", OpInsert, write(make(chan int))); err == nil {
 		t.Fatal("expected the enqueue to fail")
 	}
 	var n int
 	if err := sqlDB.QueryRow(`SELECT COUNT(*) FROM "orders"`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("the insert survived a failed enqueue: %d %v", n, err)
 	}
-	if _, err := WriteWithWebhooks(ctx, db, cfg, "orders", OpInsert, write("ok")); err != nil {
+	if _, err := WriteWithChanges(ctx, db, cfg, "orders", OpInsert, write("ok")); err != nil {
 		t.Fatal(err)
 	}
 	jobs, _ := ListJobs(ctx, sqlDB, "", 10)

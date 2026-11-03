@@ -210,6 +210,14 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 - Deliveries are background jobs: they don't slow the request, survive restarts and are retried (30s, 1m, 2m, … ≤1h) until `max_attempts` (1–20, default 5) when the receiver doesn't answer 2xx (redirects are not followed). A change inside a `transaction` step is sent only if it commits. `supacraft jobs list` / MCP `get_jobs` show them as `webhook:<name>`; `retry_job` resends a failed one. The same network rules as `http.request` apply.
 - In tests, deliveries are queued but not sent: `expect.webhooks` checks them, and with `run_jobs` they go to `http_mocks`.
 
+**`realtime`**: Stream the changes of some tables to clients over a WebSocket (`GET /realtime`, see Realtime below):
+```json
+"realtime": { "tables": ["messages", "orders"] }
+```
+- Each table needs `api_settings.tables.<table>.query.enabled`: a subscriber gets exactly the rows `/query` would return to it — the table's `auth`, `roles` and `row_policy` apply to every changed row (also a deleted one), and only readable columns are sent.
+- The same changes as webhooks are streamed (CRUD endpoints, `db.*` steps, auth, `supacraft users set-role`), only after they commit, also when another process (the CLI) makes them.
+- Changes are kept for 15 minutes in the tenant database, so a client that reconnects within that time resumes where it left off. Tables not listed cost nothing.
+
 **`openapi`**: `false` stops serving `GET /meta/openapi.json` (default `true`, see OpenAPI below). The CLI and MCP export work either way.
 
 **`cors`**: Controls which **browser** origins may read responses from the tenant API. Single field `cors.allowed_origin`, a string:
@@ -1060,6 +1068,28 @@ Response: `{ "data": { "deleted": 1 } }`
 
 #### GET /meta/openapi.json
 The API as an OpenAPI 3.1 document: the auth, CRUD and file endpoints the project enables and its HTTP functions (not `PRIVATE` ones), with schemas built from the table columns (`readable`/`creatable`/`updatable`, `nullable`, `enum_values`) and each function's `route.input`. It lists only what clients can call — each endpoint's input and response — never other columns or tables. Access rules (`auth`, `roles`) appear as bearer-token security and descriptions. No auth required; set `api_settings.openapi: false` to stop serving it (404). The table schema itself is never served over HTTP. The same document comes from `supacraft openapi -o openapi.json` (`--server-url`, `--central` for a central server's `X-Tenant-ID` header) and the MCP `get_openapi` tool.
+
+---
+
+### Realtime
+
+#### GET /realtime (WebSocket)
+Streams the changes of the `api_settings.realtime` tables. Browsers can't send headers on a WebSocket, so on a central server the tenant goes in the URL: `wss://api.example.com/realtime?tenant=<id>`. Browsers may connect from `api_settings.cors.allowed_origin` (or the API's own origin). Every message is a JSON object with a `type`:
+
+| Client sends | Server answers |
+|---|---|
+| `{"type": "auth", "token": "<access token>"}` — needed for tables whose query has `auth`/`roles`; send a fresh token (same user) before the current one expires | `{"type": "authed", "user_id", "expires_at"}` or an error `unauthorized` |
+| `{"type": "subscribe", "id": "m1", "table": "messages", "events": ["insert", "update", "delete"], "where": {"room_id": "r1"}, "since": 120}` — `events` defaults to all three; `where` uses the `/query` filter syntax on readable columns; `since` (optional) resumes after that seq | `{"type": "subscribed", "id": "m1", "seq": 120}` (the seq it starts after), then `{"type": "change", "id": "m1", "seq": 121, "table": "messages", "event": "insert", "row": {...}}` for every matching change, in order |
+| `{"type": "unsubscribe", "id": "m1"}` | `{"type": "unsubscribed", "id": "m1"}` |
+| `{"type": "ping"}` | `{"type": "pong"}` |
+
+- `row` is the row after an insert or update and the deleted row for a delete, readable columns only. The access rule is checked on every change with the current config and the user's current role.
+- Errors: `{"type": "error", "id"?, "code", "message"}` with code `bad_request`, `unauthorized`, `forbidden`, `not_found` (table not streamed or query off), `resync` (the changes after `since` are no longer kept: reload with `/query` and subscribe without `since`) or `server_error`. An error with an `id` ends that subscription.
+- To resume after a disconnect, remember the last `seq` per subscription and subscribe again with `since`.
+- The server closes the connection with code 4001 when the token expires or the session ends (user disabled, password reset), 4004 when the tenant is removed or disabled, 4008 when the client reads too slowly (reconnect with `since`), 1001 on shutdown.
+- Limits: 20 connections per client IP and 1000 per tenant (HTTP 429 beyond), 50 subscriptions per connection, 64 KB per client message. The server pings every 25 s.
+- A `row_policy` is evaluated on the changed row as if it were the only row of its table, so a subquery on the same table sees only that row; subqueries on other tables work as in `/query`.
+- `supacraft realtime tail [table]` prints the changes as they happen (`--since <seq>`); the MCP `get_changes` tool reads them.
 
 ---
 

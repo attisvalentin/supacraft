@@ -82,7 +82,7 @@ func HandleCreate(pool *tenant.PoolManager) http.HandlerFunc {
 // insertRow runs an INSERT and its webhooks atomically and returns the new
 // row (readable columns only), nil if it can't be read back.
 func insertRow(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, table *tenant.SchemaTable, insertSQL string, args []any) (map[string]any, error) {
-	rows, err := tenant.WriteWithWebhooks(ctx, db, cfg, table.Name, tenant.OpInsert, func(q tenant.Querier) ([]map[string]any, error) {
+	rows, err := tenant.WriteWithChanges(ctx, db, cfg, table.Name, tenant.OpInsert, func(q tenant.Querier) ([]map[string]any, error) {
 		res, err := q.Exec(ctx, insertSQL, args...)
 		if err != nil {
 			return nil, err
