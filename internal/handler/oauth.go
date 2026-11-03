@@ -176,9 +176,9 @@ func HandleOAuthCallback(pool *tenant.PoolManager) http.HandlerFunc {
 	}
 }
 
-// oauthUser finds the user of a provider account, links it to the user
-// with the same email when the provider verified that email, or creates a
-// user. reason is a sign-in refusal to show the app (error=<reason>).
+// oauthUser finds the user of a provider account, or — when the provider
+// verified its email — links it to the user with that email or creates
+// one. reason is a sign-in refusal to show the app (error=<reason>).
 func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, provider string, id oauth.Identity) (userID, reason string, err error) {
 	err = db.QueryRow(ctx, `SELECT "user_id" FROM "_supacraft_identities" WHERE "provider" = ? AND "subject" = ?`, provider, id.Subject).Scan(&userID)
 	if err == nil {
@@ -190,12 +190,14 @@ func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, pro
 	if id.Email == "" {
 		return "", "email_required", nil
 	}
+	// Only a verified email may sign in: an unverified one would let
+	// someone claim another person's address at the provider, either
+	// taking over their account or registering it before they do.
+	if !id.EmailVerified {
+		return "", "email_not_verified", nil
+	}
 	err = db.QueryRow(ctx, `SELECT "id" FROM "users" WHERE "email" = ?`, id.Email).Scan(&userID)
 	switch {
-	case err == nil && !id.EmailVerified:
-		// Linking on an unverified email would let anyone who claims it at
-		// the provider take over the account.
-		return "", "email_not_verified", nil
 	case err == nil:
 		if reason := activeReason(ctx, db, userID); reason != "" {
 			return "", reason, nil
@@ -228,7 +230,7 @@ func createOAuthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfi
 	if err != nil {
 		return "", err
 	}
-	row := map[string]any{"id": uuid.NewString(), "email": id.Email, "password": noPassword, "email_verified": id.EmailVerified}
+	row := map[string]any{"id": uuid.NewString(), "email": id.Email, "password": noPassword, "email_verified": true}
 	if role := cfg.APISettings.Auth.DefaultRoleName(); role != "" {
 		row["role"] = role
 	}

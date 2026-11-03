@@ -155,7 +155,12 @@ func TestOAuth(t *testing.T) {
 		t.Fatalf("linked account signed in as %v (user %s)", out["email"], id)
 	}
 
-	// An unverified email never takes over an existing account.
+	// An unverified email creates no account (it could be someone else's)...
+	f.userinfo = map[string]any{"sub": "u-3", "email": "carol@example.com", "email_verified": false}
+	if back := signIn(t, a, f, "sso"); back.Get("error") != "email_not_verified" {
+		t.Fatalf("unverified new account: %v", back)
+	}
+	// ...and never takes over an existing one.
 	a.register("bob@example.com")
 	f.userinfo = map[string]any{"sub": "attacker", "email": "bob@example.com", "email_verified": false}
 	if back := signIn(t, a, f, "sso"); back.Get("error") != "email_not_verified" || back.Get("code") != "" {
@@ -210,5 +215,31 @@ func TestOAuth_Refusals(t *testing.T) {
 	plain := newTestAPIWith(t, `{"name": "plain", "auth_enabled": true}`)
 	if status, _, _ := plain.do("POST", "/auth/oauth/exchange", `{"code":"x"}`); status != http.StatusNotFound {
 		t.Errorf("exchange without oauth: %d", status)
+	}
+}
+
+// On a central server the browser can't send X-Tenant-ID: start takes
+// ?tenant= and the callback finds the tenant in the state.
+func TestOAuth_CentralServer(t *testing.T) {
+	f := newFakeProvider(t)
+	a := newTestAPIServing(t, strings.Replace(oauthProject, "ISSUER", f.URL, 1), false)
+	f.userinfo = map[string]any{"sub": "c-1", "email": "c@example.com", "email_verified": true}
+
+	rec := a.raw("GET", "/auth/oauth/sso/start?tenant=demo&redirect_to="+url.QueryEscape("https://app.example.com/done"), "")
+	if rec.Code != http.StatusFound {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body)
+	}
+	query := f.approve(t, rec.Header().Get("Location"))
+	if !strings.Contains(query, "state=demo.") {
+		t.Fatalf("state has no tenant prefix: %s", query)
+	}
+	rec = a.raw("GET", "/auth/oauth/sso/callback?"+query, "")
+	back, _ := url.Parse(rec.Header().Get("Location"))
+	if rec.Code != http.StatusFound || back.Query().Get("code") == "" {
+		t.Fatalf("callback: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	status, _, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Query().Get("code")+`"}`, "X-Tenant-ID", "demo")
+	if status != http.StatusOK {
+		t.Fatalf("exchange: %d %s", status, raw)
 	}
 }

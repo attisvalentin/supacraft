@@ -974,7 +974,7 @@ All four answer `404` when their flow isn't configured. A new verification link 
 | 3 | API → app | The browser lands on `redirect_to?code=<one-time code>` (valid 1 minute), or `?error=access_denied`, `email_not_verified`, `email_required`, `account_disabled`, `provider_error`, `server_error`. |
 | 4 | app | `POST /auth/oauth/exchange {"code"}` → the same `{token, refresh_token, expires_in}` as `/auth/login` (`400` for a bad code, `403` when `email_verification.required` and the email isn't verified). |
 
-- A provider account is linked to its user once. A new account creates a user (default role, `users.insert` webhooks) whose email is verified when the provider says so; it has no password until the user resets one. An existing user with the same email is linked only when the provider verified that email — otherwise sign-in fails with `email_not_verified`, so nobody takes over an account by claiming its email at a provider.
+- A provider account is linked to its user once. The first sign-in needs an email the provider verified (`email_not_verified` otherwise), so nobody can claim another person's address at a provider to take over or pre-register their account. It is then linked to the user with that email, or creates one (default role, verified email, `users.insert` webhooks) that has no password until the user resets one.
 
 ---
 

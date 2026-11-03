@@ -29,9 +29,9 @@ func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http
 			tenantID := r.Header.Get("X-Tenant-ID")
 			if tenantID == "" {
 				tenantID = oauthTenant(r)
-			}
-			if tenantID == "" {
-				tenantID = defaultTenant
+				if tenantID == "" {
+					tenantID = defaultTenant
+				}
 				// Downstream handlers read the tenant from the header.
 				r.Header.Set("X-Tenant-ID", tenantID)
 			}

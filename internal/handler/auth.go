@@ -305,41 +305,7 @@ func HandleRefresh(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		auth := cfg.APISettings.Auth
-		newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub":   userID,
-			"email": email,
-			"exp":   time.Now().Add(auth.AccessTTL()).Unix(),
-			"iat":   time.Now().Unix(),
-			"ver":   version,
-		})
-		newTokenString, err := newToken.SignedString([]byte(jwtSecret))
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("failed to create token: %v", err))
-			return
-		}
-
-		newRefreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub":   userID,
-			"email": email,
-			"type":  "refresh",
-			"exp":   time.Now().Add(auth.RefreshTTL()).Unix(),
-			"iat":   time.Now().Unix(),
-			"ver":   version,
-		})
-		newRefreshTokenString, err := newRefreshToken.SignedString([]byte(jwtSecret))
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("failed to create refresh token: %v", err))
-			return
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"data": map[string]any{
-				"token":         newTokenString,
-				"refresh_token": newRefreshTokenString,
-				"expires_in":    auth.AccessTTLSeconds(),
-			},
-		})
+		writeTokens(w, r, dbPool, cfg, userID, email, version)
 	}
 }
 
