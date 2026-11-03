@@ -3,6 +3,8 @@ package tenant
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,7 +86,9 @@ func EmitWebhooks(ctx context.Context, q Querier, cfg *TenantConfig, table, op s
 		}
 		out[i] = r
 	}
-	for name, w := range cfg.APISettings.Webhooks {
+	// In name order, so deliveries queue the same way every time.
+	for _, name := range slices.Sorted(maps.Keys(cfg.APISettings.Webhooks)) {
+		w := cfg.APISettings.Webhooks[name]
 		if !w.Wants(table, op) {
 			continue
 		}

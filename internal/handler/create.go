@@ -89,7 +89,7 @@ func insertRow(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, tab
 		}
 		lastID, err := res.LastInsertId()
 		if err != nil {
-			return nil, fmt.Errorf("last_insert_rowid: %v", err)
+			return nil, fmt.Errorf("last_insert_rowid: %w", err)
 		}
 		return queryRows(ctx, q, cfg, "SELECT * FROM "+query.QuoteIdent(table.Name)+" WHERE rowid = ?", lastID)
 	})

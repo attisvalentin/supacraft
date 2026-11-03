@@ -326,7 +326,7 @@ func ExecuteDBInsert(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		if err != nil {
 			return nil, fmt.Errorf("last_insert_rowid: %w", err)
 		}
-		return queryMaps(ctx, q, deps, "SELECT * FROM "+query.QuoteIdent(table.Name)+" WHERE rowid = ?", lastID)
+		return query.QueryMaps(ctx, q, deps.Timezone, "SELECT * FROM "+query.QuoteIdent(table.Name)+" WHERE rowid = ?", lastID)
 	})
 	if err != nil {
 		return fmt.Errorf("db.insert: %w", err)
@@ -368,7 +368,7 @@ func ExecuteDBUpdate(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 
 	updateSQL, args := query.BuildUpdate(table.Name, resolvedData, whereSql, whereArgs)
 	results, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
-		return queryMaps(ctx, q, deps, updateSQL+" RETURNING *", args...)
+		return query.QueryMaps(ctx, q, deps.Timezone, updateSQL+" RETURNING *", args...)
 	})
 	if err != nil {
 		return fmt.Errorf("db.update: %w", err)
@@ -406,7 +406,7 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	if deps.Config.WantsWebhook(table.Name, tenant.OpDelete) {
 		// The webhook gets the deleted rows: RETURNING reads exactly those.
 		deleted, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpDelete, func(q tenant.Querier) ([]map[string]any, error) {
-			return queryMaps(ctx, q, deps, sql+" RETURNING *", args...)
+			return query.QueryMaps(ctx, q, deps.Timezone, sql+" RETURNING *", args...)
 		})
 		if err != nil {
 			return fmt.Errorf("db.delete: %w", err)
@@ -426,16 +426,6 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		})
 	}
 	return nil
-}
-
-// queryMaps runs a query and reads all its rows.
-func queryMaps(ctx context.Context, q tenant.Querier, deps *StepDeps, stmt string, args ...any) ([]map[string]any, error) {
-	rows, err := q.Query(ctx, stmt, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return query.ScanAllRowsToMaps(rows, deps.Timezone)
 }
 
 // resolveWhereMap resolves {{...}} references in where clause values. A

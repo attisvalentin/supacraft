@@ -1,11 +1,25 @@
 package query
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/attisvalentin/supacraft/internal/tenant"
 )
+
+// QueryMaps runs a query and reads all its rows; with UPDATE/DELETE ...
+// RETURNING * they are exactly the rows the statement changed.
+func QueryMaps(ctx context.Context, q tenant.Querier, loc *time.Location, stmt string, args ...any) ([]map[string]any, error) {
+	rows, err := q.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return ScanAllRowsToMaps(rows, loc)
+}
 
 // ScanAllRowsToMaps reads every row from a *sql.Rows result set, returning
 // []map[colname]value. Driver-returned []byte values that look like UTF-8 strings
