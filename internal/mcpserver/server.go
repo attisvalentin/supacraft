@@ -62,6 +62,9 @@ Background work: a job.enqueue step runs a PRIVATE function later with retries; 
 enqueue_job and retry_job act on it. api_settings.webhooks POST table changes to other systems through the same
 queue (signed, retried); test them with expect.webhooks and run_jobs + http_mocks.
 
+Sign-in with Google, GitHub or any OpenID Connect provider: api_settings.auth.oauth (see the reference). Client
+secrets are "${NAME}" references the user sets; tell them which callback URL to register at the provider.
+
 Roles: api_settings.auth.roles defines them; "roles" on a table method, file endpoint or function route limits
 access. list_users shows who has which role. Change a role only when the user asks: set_user_role makes the user
 approve every change in a prompt (you cannot approve it); otherwise give them "supacraft users set-role <email> <role>".`

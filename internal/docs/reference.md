@@ -945,6 +945,37 @@ Both mail a one-time link and need `api_settings.email.smtp` and a template in `
 
 All four answer `404` when their flow isn't configured. A new verification link is also mailed on `/auth/register` when `email_verification` is set.
 
+#### Sign in with Google, GitHub or OpenID Connect
+
+```json
+{
+  "api_settings": {
+    "auth": {
+      "oauth": {
+        "public_url": "https://api.example.com",
+        "redirect_urls": ["https://app.example.com/auth/done"],
+        "providers": {
+          "google": { "client_id": "${GOOGLE_CLIENT_ID}", "client_secret": "${GOOGLE_CLIENT_SECRET}" },
+          "github": { "client_id": "${GITHUB_CLIENT_ID}", "client_secret": "${GITHUB_CLIENT_SECRET}" },
+          "company_sso": { "issuer": "https://login.example.com", "client_id": "${SSO_CLIENT_ID}", "client_secret": "${SSO_CLIENT_SECRET}" }
+        }
+      }
+    }
+  }
+}
+```
+- `google` and `github` are built in; any other name is an OpenID Connect provider found from its `issuer` (Microsoft Entra, GitLab, Auth0, Keycloak, Okta, …), written exactly as the provider's discovery document states it (trailing slash included or not). Linked accounts are stored per issuer, so renaming a provider keeps them, and pointing a name at another issuer starts fresh. `scopes` overrides the defaults (`openid email profile`; GitHub `read:user user:email`).
+- `public_url` is the API's public base URL. Register `<public_url>/auth/oauth/<provider>/callback` as the redirect/callback URL in each provider's console. `redirect_urls` are the app pages a sign-in may return to (matched exactly).
+
+| Step | Who | What |
+|---|---|---|
+| 1 | app | Make a random `code_verifier` (43–128 chars) and keep it (e.g. sessionStorage). Open `GET /auth/oauth/<provider>/start?redirect_to=<one of redirect_urls>&code_challenge=<base64url(SHA-256(code_verifier)), no padding>&code_challenge_method=S256` in the browser (on a central server add `&tenant=<id>`). |
+| 2 | API → provider → API | The user signs in at the provider (PKCE, one-time state, 10 minutes). |
+| 3 | API → app | The browser lands on `redirect_to?code=<one-time code>` (valid 1 minute), or `?error=access_denied`, `email_not_verified`, `email_required`, `account_disabled`, `provider_error`, `server_error`. |
+| 4 | app | `POST /auth/oauth/exchange {"code", "code_verifier"}` → the same `{token, refresh_token, expires_in}` as `/auth/login` (`400` for a bad code or a verifier that doesn't match, `403` when `email_verification.required` and the email isn't verified). The verifier binds the code to the browser that started the sign-in, so a code from someone else's sign-in is useless (login CSRF). |
+
+- A provider account is linked to its user once. The first sign-in needs an email the provider verified (`email_not_verified` otherwise), so nobody can claim another person's address at a provider to take over or pre-register their account. It is then linked to the user with that email, or creates one (default role, verified email, `users.insert` webhooks) that has no password until the user resets one. Linking a user whose email was never verified hands the account to the provider's (proven) owner: its password stops working and its sessions end, so whoever registered that address first can't keep access.
+
 ---
 
 ### CRUD Endpoints

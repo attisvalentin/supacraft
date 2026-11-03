@@ -17,6 +17,35 @@ var AuthTokensDDL = []string{
 		"created_at" INTEGER NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS "_supacraft_auth_tokens_user" ON "_supacraft_auth_tokens" ("user_id", "purpose")`,
+	// A pending OAuth sign-in: the state sent to the provider (hashed),
+	// the PKCE verifier and where to return.
+	// app_challenge is the app's own PKCE challenge: the login code is only
+	// exchanged with its verifier, so it is useless in another browser.
+	`CREATE TABLE IF NOT EXISTS "_supacraft_oauth_states" (
+		"state_hash"    TEXT PRIMARY KEY,
+		"provider"      TEXT NOT NULL,
+		"verifier"      TEXT NOT NULL,
+		"app_challenge" TEXT NOT NULL,
+		"redirect_to"   TEXT NOT NULL,
+		"expires_at"    INTEGER NOT NULL
+	)`,
+	// A login code from a callback, waiting for the app's exchange.
+	`CREATE TABLE IF NOT EXISTS "_supacraft_oauth_codes" (
+		"code_hash"     TEXT PRIMARY KEY,
+		"user_id"       TEXT NOT NULL,
+		"app_challenge" TEXT NOT NULL,
+		"expires_at"    INTEGER NOT NULL
+	)`,
+	// Which provider account belongs to which user. "provider" is the
+	// account namespace: "github" or the OIDC issuer URL.
+	`CREATE TABLE IF NOT EXISTS "_supacraft_identities" (
+		"provider"   TEXT NOT NULL,
+		"subject"    TEXT NOT NULL,
+		"user_id"    TEXT NOT NULL,
+		"email"      TEXT NOT NULL DEFAULT '',
+		"created_at" INTEGER NOT NULL,
+		PRIMARY KEY ("provider", "subject")
+	)`,
 }
 
 // authColumns are the built-in users columns the auth handlers query that

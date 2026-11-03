@@ -135,6 +135,51 @@ type AuthSettings struct {
 	// unset). Empty disables roles.
 	Roles       []string `json:"roles,omitempty"`
 	DefaultRole string   `json:"default_role,omitempty"`
+	// OAuth signs users in with Google, GitHub or any OpenID Connect
+	// provider.
+	OAuth *OAuthSettings `json:"oauth,omitempty"`
+}
+
+// OAuthSettings configures sign-in through external providers. PublicURL
+// is the API's public base URL (the providers call back to
+// <PublicURL>/auth/oauth/<provider>/callback); RedirectURLs are the app
+// pages a sign-in may return to.
+type OAuthSettings struct {
+	PublicURL    string                   `json:"public_url"`
+	RedirectURLs []string                 `json:"redirect_urls"`
+	Providers    map[string]OAuthProvider `json:"providers"`
+}
+
+// OAuthProvider is one provider: "google" and "github" are built in; any
+// other name is an OpenID Connect provider found from Issuer.
+type OAuthProvider struct {
+	ClientID     string   `json:"client_id"`
+	ClientSecret string   `json:"client_secret"`
+	Issuer       string   `json:"issuer,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+}
+
+// Provider returns the configured provider name, if OAuth is set up.
+func (a AuthSettings) Provider(name string) (OAuthProvider, bool) {
+	if a.OAuth == nil {
+		return OAuthProvider{}, false
+	}
+	p, ok := a.OAuth.Providers[name]
+	return p, ok
+}
+
+// RedirectAllowed reports whether a sign-in may return to url: it must be
+// one of RedirectURLs exactly, so nobody can send the login code elsewhere.
+func (o *OAuthSettings) RedirectAllowed(url string) bool {
+	if o == nil {
+		return false
+	}
+	for _, u := range o.RedirectURLs {
+		if u == url {
+			return true
+		}
+	}
+	return false
 }
 
 // RolesEnabled reports whether the project defines roles.

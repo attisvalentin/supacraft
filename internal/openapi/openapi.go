@@ -184,6 +184,26 @@ func (d *doc) auth() {
 			},
 		})
 	}
+	if o := auth.OAuth; o != nil && len(o.Providers) > 0 {
+		names := sortedKeys(o.Providers)
+		provider := []any{map[string]any{"name": "provider", "in": "path", "required": true, "schema": map[string]any{"type": "string", "enum": toAny(names)}}}
+		d.op("GET", "/auth/oauth/{provider}/start", map[string]any{
+			"tags": []any{"auth"}, "summary": "Sign in with a provider (open in the browser)", "security": []any{},
+			"parameters": append(provider, map[string]any{"name": "redirect_to", "in": "query", "required": true,
+				"description": "One of the configured redirect URLs; it receives ?code= (or ?error=).",
+				"schema":      map[string]any{"type": "string", "enum": toAny(o.RedirectURLs)}},
+				map[string]any{"name": "code_challenge", "in": "query", "required": true,
+					"description": "base64url(SHA-256(code_verifier)) of a random verifier the app keeps for the exchange.",
+					"schema":      map[string]any{"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}},
+				map[string]any{"name": "code_challenge_method", "in": "query", "required": true, "schema": map[string]any{"type": "string", "enum": []any{"S256"}}}),
+			"responses": map[string]any{"302": map[string]any{"description": "To the provider."}, "400": errorResponse("redirect_to is not allowed.")},
+		})
+		d.op("POST", "/auth/oauth/exchange", map[string]any{
+			"tags": []any{"auth"}, "summary": "Exchange the code from the sign-in redirect for tokens", "security": []any{},
+			"requestBody": jsonBody(object(map[string]any{"code": token, "code_verifier": token}, "code", "code_verifier")),
+			"responses":   map[string]any{"200": tokens, "400": errorResponse("Invalid, used or expired code, or a code_verifier that doesn't match."), "403": errorResponse("Email not verified.")},
+		})
+	}
 	if auth.EmailVerification.Enabled() {
 		d.op("POST", "/auth/verify-email", map[string]any{
 			"tags": []any{"auth"}, "summary": "Verify an email with its token", "security": []any{},
@@ -580,6 +600,14 @@ func inputSchema(in tenant.InputField) map[string]any {
 		s["default"] = in.Default
 	}
 	return s
+}
+
+func toAny(s []string) []any {
+	out := make([]any, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
+	return out
 }
 
 func sortedKeys[V any](m map[string]V) []string {

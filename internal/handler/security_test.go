@@ -74,6 +74,13 @@ func newTestAPI(t *testing.T) *testAPI {
 // newTestAPIWith applies projectJSON to a fresh data dir and serves it.
 func newTestAPIWith(t *testing.T, projectJSON string) *testAPI {
 	t.Helper()
+	return newTestAPIServing(t, projectJSON, true)
+}
+
+// newTestAPIServing is newTestAPIWith; without asDefault, requests must
+// name the tenant like on a central server.
+func newTestAPIServing(t *testing.T, projectJSON string, asDefault bool) *testAPI {
+	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, project.FileName), []byte(projectJSON), 0o644); err != nil {
 		t.Fatal(err)
@@ -87,11 +94,13 @@ func newTestAPIWith(t *testing.T, projectJSON string) *testAPI {
 	}
 
 	cfg := &config.Config{
-		DataDir:       p.DataDir(),
-		StoragePath:   filepath.Join(p.DataDir(), "storage"),
-		MaxFileSize:   1 << 20,
-		MaxBodySize:   1 << 16,
-		DefaultTenant: p.TenantID(),
+		DataDir:     p.DataDir(),
+		StoragePath: filepath.Join(p.DataDir(), "storage"),
+		MaxFileSize: 1 << 20,
+		MaxBodySize: 1 << 16,
+	}
+	if asDefault {
+		cfg.DefaultTenant = p.TenantID()
 	}
 	store, err := tenant.NewFileStore(cfg)
 	if err != nil {
