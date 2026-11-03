@@ -78,11 +78,17 @@ func HandleDelete(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
+		deleted, err := rowsBeforeDelete(r.Context(), dbPool, cfg, table, whereSql, whereArgs)
+		if err != nil {
+			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("read rows to delete: %v", err))
+			return
+		}
 		result, err := dbPool.Exec(r.Context(), sql, args...)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("delete failed: %v", err))
 			return
 		}
+		emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpDelete, deleted)
 
 		affected, _ := result.RowsAffected()
 		writeJSON(w, http.StatusOK, map[string]any{

@@ -141,13 +141,7 @@ func ExecuteHTTPRequest(ctx context.Context, step *tenant.FunctionStep, pCtx *Pi
 	if stepLabel == "" {
 		stepLabel = "(no assign)"
 	}
-	client := httpClient
-	if sb := SandboxFrom(ctx); sb != nil {
-		client = &http.Client{Transport: sb.HTTP, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	} else if templatedHost(step.URL) {
-		client = strictHTTPClient
-	}
-	resp, err := client.Do(req)
+	resp, err := ClientFor(ctx, step.URL).Do(req)
 	if err != nil {
 		return fmt.Errorf("http.request step failed: %s: %w", stepLabel, err)
 	}

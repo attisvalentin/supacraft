@@ -198,6 +198,18 @@ References use the **exact, case-sensitive** key: `{{env.STRIPE_API_KEY}}` resol
 
 **`rate_limit`**: Request rate limit per client. `enabled: true` + `requests_per_minute: N` lets each client IP make N requests/minute to the tenant across all endpoints (sliding window), so one noisy client cannot lock out everyone else. Over-limit requests return `429 Too Many Requests`. Omit the block or set `enabled: false` for no limit. Behind a reverse proxy, start the server with `TRUST_PROXY=1` so the limit uses the client address from `X-Real-IP` / `X-Forwarded-For` instead of the proxy's. `/auth/*` is always limited to 20 requests/minute per client IP, whatever this block says.
 
+**`webhooks`**: Send table changes to other systems (an ERP, a CRM, Slack via a relay, ...), by name:
+```json
+"webhooks": {
+  "orders_to_erp": { "url": "${ERP_WEBHOOK_URL}", "events": ["orders.insert", "orders.update"], "secret": "${ERP_WEBHOOK_SECRET}", "max_attempts": 5 }
+}
+```
+- `events`: `<table>.insert`, `<table>.update`, `<table>.delete` or `<table>.*`. Changes made by the CRUD endpoints, by `db.insert` / `db.update` / `db.delete` steps (functions, cron, jobs) and by `/auth/register` (`users.insert`) are sent.
+- Each write is one POST to `url` with `{"id", "event", "table", "created_at", "rows": [...]}` — the changed rows (the deleted rows for a delete; the rows after the change for an update), **readable columns only** (never `password`), at most 100 rows per delivery.
+- Headers: `X-SupaCraft-Event`, `X-SupaCraft-Delivery` (the event id; use it to ignore duplicates), `X-SupaCraft-Attempt`, and with a `secret` `X-SupaCraft-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" keyed with the secret>`. The receiver recomputes it and rejects old `t` values. Write `url` and `secret` as `"${NAME}"` references.
+- Deliveries are background jobs: they don't slow the request, survive restarts and are retried (30s, 1m, 2m, … ≤1h) until `max_attempts` (1–20, default 5) when the receiver doesn't answer 2xx (redirects are not followed). A change inside a `transaction` step is sent only if it commits. `supacraft jobs list` / MCP `get_jobs` show them as `webhook:<name>`; `retry_job` resends a failed one. The same network rules as `http.request` apply.
+- In tests, deliveries are queued but not sent: `expect.webhooks` checks them, and with `run_jobs` they go to `http_mocks`.
+
 **`openapi`**: `false` stops serving `GET /meta/openapi.json` (default `true`, see OpenAPI below). The CLI and MCP export work either way.
 
 **`cors`**: Controls which **browser** origins may read responses from the tenant API. Single field `cors.allowed_origin`, a string:
@@ -754,7 +766,8 @@ Each test sends one request to the API on its **own fresh database holding the s
 | `expect.emails` | How many emails were sent. Emails are captured, never delivered. |
 | `expect.db` | After the request, `count` rows of the table match `where` (same filter operators as `/query`). |
 | `run_jobs` | `true` runs the jobs the request queued (and the jobs those queue, and retries), ignoring `delay`, before the checks. Without it jobs stay `pending`. |
-| `expect.jobs` | The queued jobs in order, each matched like `body` against `{function, args, status, attempts, last_error}`, e.g. `[{"function": "send_invoice", "status": "done"}]`. |
+| `expect.webhooks` | The queued webhook deliveries in order, each matched like `body` against `{webhook, event, rows, status, attempts, last_error}`; `[]` means none. |
+| `expect.jobs` | The queued function jobs (not webhook deliveries) in order, each matched like `body` against `{function, args, status, attempts, last_error}`, e.g. `[{"function": "send_invoice", "status": "done"}]`. |
 
 A failed test reports the differences, the internal server error (if any) and the response. Write tests for every function you add, including the failure cases (missing auth, wrong role, invalid input).
 

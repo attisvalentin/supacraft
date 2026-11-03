@@ -56,6 +56,9 @@ type Expect struct {
 	// Jobs are the queued jobs in order, each matched like Body against
 	// {function, args, status, attempts, last_error}.
 	Jobs []any `json:"jobs,omitempty"`
+	// Webhooks are the queued webhook deliveries in order, each matched
+	// like Body against {webhook, event, rows, status}.
+	Webhooks []any `json:"webhooks,omitempty"`
 }
 
 // DBExpect counts the rows of a table matching Where after the request.
@@ -279,6 +282,11 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 						v.errorf(jp+".function", "unknown function %q", fn)
 					}
 				}
+			}
+		}
+		if wh, set := expect["webhooks"]; set && wh != nil {
+			if _, isList := wh.([]any); !isList {
+				v.errorf(path+".expect.webhooks", "must be a list of deliveries ({webhook, event, rows?, status?})")
 			}
 		}
 		if n, set := expect["emails"]; set {

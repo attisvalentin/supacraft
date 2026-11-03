@@ -80,6 +80,7 @@ func HandleCreate(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
+		emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpInsert, []map[string]any{row})
 		writeJSON(w, http.StatusCreated, map[string]any{"data": row})
 	}
 }

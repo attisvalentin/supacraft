@@ -338,6 +338,9 @@ func ExecuteDBInsert(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	if err != nil {
 		return err
 	}
+	if err := tenant.EmitWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpInsert, results); err != nil {
+		return fmt.Errorf("db.insert: %w", err)
+	}
 
 	if step.Assign != "" {
 		if len(results) == 1 {
@@ -388,6 +391,9 @@ func ExecuteDBUpdate(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	if err != nil {
 		return err
 	}
+	if err := tenant.EmitWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpUpdate, results); err != nil {
+		return fmt.Errorf("db.update: %w", err)
+	}
 
 	if step.Assign != "" {
 		if len(results) == 1 {
@@ -418,9 +424,27 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 
 	sql, args := query.BuildDelete(table.Name, whereSql, whereArgs)
 
+	// A webhook gets the deleted rows, so read them first.
+	var deleted []map[string]any
+	if deps.Config.WantsWebhook(table.Name, tenant.OpDelete) {
+		selectSQL, selectArgs := query.BuildSelect(table.Name, allColumnNames(table), whereSql, whereArgs, "", "", nil)
+		rows, err := deps.DBPool.Query(ctx, selectSQL, selectArgs...)
+		if err != nil {
+			return fmt.Errorf("db.delete: read rows: %w", err)
+		}
+		deleted, err = query.ScanAllRowsToMaps(rows, deps.Timezone)
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
+
 	res, err := deps.DBPool.Exec(ctx, sql, args...)
 	if err != nil {
 		return fmt.Errorf("db.delete: query failed: %w", err)
+	}
+	if err := tenant.EmitWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpDelete, deleted); err != nil {
+		return fmt.Errorf("db.delete: %w", err)
 	}
 
 	if step.Assign != "" {

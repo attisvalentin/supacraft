@@ -123,6 +123,7 @@ func HandleUpdate(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
+		emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpUpdate, results)
 		row := schema.FilterNonReadableFromRow(results[0], table)
 		writeJSON(w, http.StatusOK, map[string]any{"data": row})
 	}

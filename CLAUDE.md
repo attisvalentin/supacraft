@@ -20,7 +20,7 @@ go vet ./...
 - `internal/app/` — starts the API server in-process.
 - `internal/docs/reference.md` — the config reference served to agents. Keep it in sync with `internal/tenant` models and `internal/pipeline` step types.
 - API runtime: `handler`, `middleware`, `pipeline`, `query`, `schema`, `storage`, `tenant`, `cronjob`, `errorlog`.
-- `internal/jobs/` — the background job worker (started with cron); the queue itself is `tenant/jobs.go` (`_supacraft_jobs` in each tenant DB), filled by the `job.enqueue` step.
+- `internal/jobs/` — the background job worker (started with cron) and webhook delivery; the queue itself is `tenant/jobs.go` (`_supacraft_jobs` in each tenant DB), filled by the `job.enqueue` step and by `tenant.EmitWebhooks`. Any new code path that writes table rows must call `EmitWebhooks` (with the transaction when there is one).
 - `internal/testrun/` — `seed` and `tests` (never deployed). Tests run each request on a fresh seeded database in a temp dir with a `pipeline.Sandbox` in the request context: email is captured and `http.request` only reaches `http_mocks`. Anything new that talks to the outside world must honour the sandbox.
 - `sqlitedb/` and `sqlitedb/ddl` — provisioning and additive migrations. `studio/` — read-only data browser.
 

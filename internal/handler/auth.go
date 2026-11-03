@@ -128,6 +128,7 @@ func HandleRegister(pool *tenant.PoolManager) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no result returned"})
 			return
 		}
+		emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpInsert, []map[string]any{row})
 		sendVerificationOnRegister(r, dbPool, cfg, email)
 		writeJSON(w, http.StatusCreated, map[string]any{"data": row})
 	}
