@@ -179,7 +179,7 @@ func HandleResetPassword(pool *tenant.PoolManager) http.HandlerFunc {
 		// The link reached the mailbox, so the email is verified too. A new
 		// session_version ends every session issued before.
 		changed, err := queryRows(r.Context(), tx, cfg,
-			`UPDATE "users" SET "password" = ?, "session_version" = COALESCE("session_version", 0) + 1, "email_verified" = 1, "updated_at" = datetime('now') WHERE "id" = ?`,
+			`UPDATE "users" SET "password" = ?, "session_version" = COALESCE("session_version", 0) + 1, "email_verified" = 1, "updated_at" = datetime('now') WHERE "id" = ? RETURNING *`,
 			string(hashed), userID)
 		if err == nil {
 			err = tenant.EmitWebhooks(r.Context(), tx, cfg, "users", tenant.OpUpdate, changed)
@@ -235,7 +235,7 @@ func HandleVerifyEmail(pool *tenant.PoolManager) http.HandlerFunc {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("verify email: %v", err))
 			return
 		}
-		changed, err := queryRows(r.Context(), tx, cfg, `UPDATE "users" SET "email_verified" = 1, "updated_at" = datetime('now') WHERE "id" = ?`, userID)
+		changed, err := queryRows(r.Context(), tx, cfg, `UPDATE "users" SET "email_verified" = 1, "updated_at" = datetime('now') WHERE "id" = ? RETURNING *`, userID)
 		if err == nil {
 			err = tenant.EmitWebhooks(r.Context(), tx, cfg, "users", tenant.OpUpdate, changed)
 		}

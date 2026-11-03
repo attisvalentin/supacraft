@@ -80,13 +80,15 @@ func HandleDelete(pool *tenant.PoolManager) http.HandlerFunc {
 
 		var affected int64
 		if cfg.WantsWebhook(table.Name, tenant.OpDelete) {
-			deleted, err := queryRows(r.Context(), dbPool, cfg, sql, args...)
+			// The webhook gets the deleted rows: RETURNING reads exactly those.
+			deleted, err := tenant.WriteWithWebhooks(r.Context(), dbPool, cfg, table.Name, tenant.OpDelete, func(q tenant.Querier) ([]map[string]any, error) {
+				return queryRows(r.Context(), q, cfg, sql+" RETURNING *", args...)
+			})
 			if err != nil {
 				writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("delete failed: %v", err))
 				return
 			}
 			affected = int64(len(deleted))
-			emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpDelete, deleted)
 		} else {
 			result, err := dbPool.Exec(r.Context(), sql, args...)
 			if err != nil {

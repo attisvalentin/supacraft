@@ -303,8 +303,8 @@ func hasColumn(table *tenant.SchemaTable, name string) bool {
 	return err == nil
 }
 
-// ExecuteDBInsert executes a db.insert step. SQLite has no portable RETURNING,
-// so we read the inserted row back via last_insert_rowid().
+// ExecuteDBInsert executes a db.insert step and reads the inserted row back
+// via last_insert_rowid().
 func ExecuteDBInsert(ctx context.Context, step *tenant.FunctionStep, pCtx *PipelineContext, deps *StepDeps) error {
 	resolvedData, err := ResolveMap(step.Data, pCtx)
 	if err != nil {
@@ -317,28 +317,18 @@ func ExecuteDBInsert(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	}
 
 	insertSQL, args := query.BuildInsert(table.Name, resolvedData)
-	res, err := deps.DBPool.Exec(ctx, insertSQL, args...)
+	results, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpInsert, func(q tenant.Querier) ([]map[string]any, error) {
+		res, err := q.Exec(ctx, insertSQL, args...)
+		if err != nil {
+			return nil, fmt.Errorf("exec failed: %w", err)
+		}
+		lastID, err := res.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("last_insert_rowid: %w", err)
+		}
+		return queryMaps(ctx, q, deps, "SELECT * FROM "+query.QuoteIdent(table.Name)+" WHERE rowid = ?", lastID)
+	})
 	if err != nil {
-		return fmt.Errorf("db.insert: exec failed: %w", err)
-	}
-
-	lastID, err := res.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("db.insert: last_insert_rowid: %w", err)
-	}
-
-	selectSQL := "SELECT * FROM " + query.QuoteIdent(table.Name) + " WHERE rowid = ?"
-	rows, err := deps.DBPool.Query(ctx, selectSQL, lastID)
-	if err != nil {
-		return fmt.Errorf("db.insert: select inserted: %w", err)
-	}
-	defer rows.Close()
-
-	results, err := query.ScanAllRowsToMaps(rows, deps.Timezone)
-	if err != nil {
-		return err
-	}
-	if err := tenant.EmitWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpInsert, results); err != nil {
 		return fmt.Errorf("db.insert: %w", err)
 	}
 
@@ -352,8 +342,9 @@ func ExecuteDBInsert(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	return nil
 }
 
-// ExecuteDBUpdate executes a db.update step. SQLite has no portable RETURNING,
-// so we re-SELECT matching rows after the UPDATE. The same WHERE is reused.
+// ExecuteDBUpdate executes a db.update step. RETURNING reads the rows as
+// changed, even when the change moves them out of the WHERE
+// (status: pending → shipped).
 func ExecuteDBUpdate(ctx context.Context, step *tenant.FunctionStep, pCtx *PipelineContext, deps *StepDeps) error {
 	resolvedWhere, err := resolveWhereMap(step.Where, pCtx)
 	if err != nil {
@@ -375,20 +366,11 @@ func ExecuteDBUpdate(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		return fmt.Errorf("db.update: build where: %w", err)
 	}
 
-	// RETURNING reads the rows as changed, even when the change moves them
-	// out of the WHERE (status: pending → shipped).
 	updateSQL, args := query.BuildUpdate(table.Name, resolvedData, whereSql, whereArgs)
-	rows, err := deps.DBPool.Query(ctx, updateSQL+" RETURNING *", args...)
+	results, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
+		return queryMaps(ctx, q, deps, updateSQL+" RETURNING *", args...)
+	})
 	if err != nil {
-		return fmt.Errorf("db.update: exec failed: %w", err)
-	}
-	defer rows.Close()
-
-	results, err := query.ScanAllRowsToMaps(rows, deps.Timezone)
-	if err != nil {
-		return err
-	}
-	if err := tenant.EmitWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpUpdate, results); err != nil {
 		return fmt.Errorf("db.update: %w", err)
 	}
 
@@ -420,19 +402,14 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	}
 
 	sql, args := query.BuildDelete(table.Name, whereSql, whereArgs)
-
-	// A webhook gets the deleted rows: RETURNING reads exactly those.
-	var deleted []map[string]any
 	var affected int64
 	if deps.Config.WantsWebhook(table.Name, tenant.OpDelete) {
-		rows, err := deps.DBPool.Query(ctx, sql+" RETURNING *", args...)
+		// The webhook gets the deleted rows: RETURNING reads exactly those.
+		deleted, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpDelete, func(q tenant.Querier) ([]map[string]any, error) {
+			return queryMaps(ctx, q, deps, sql+" RETURNING *", args...)
+		})
 		if err != nil {
-			return fmt.Errorf("db.delete: query failed: %w", err)
-		}
-		deleted, err = query.ScanAllRowsToMaps(rows, deps.Timezone)
-		rows.Close()
-		if err != nil {
-			return err
+			return fmt.Errorf("db.delete: %w", err)
 		}
 		affected = int64(len(deleted))
 	} else {
@@ -442,9 +419,6 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		}
 		affected, _ = res.RowsAffected()
 	}
-	if err := tenant.EmitWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpDelete, deleted); err != nil {
-		return fmt.Errorf("db.delete: %w", err)
-	}
 
 	if step.Assign != "" {
 		pCtx.Set(step.Assign, map[string]any{
@@ -452,6 +426,16 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		})
 	}
 	return nil
+}
+
+// queryMaps runs a query and reads all its rows.
+func queryMaps(ctx context.Context, q tenant.Querier, deps *StepDeps, stmt string, args ...any) ([]map[string]any, error) {
+	rows, err := q.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return query.ScanAllRowsToMaps(rows, deps.Timezone)
 }
 
 // resolveWhereMap resolves {{...}} references in where clause values. A

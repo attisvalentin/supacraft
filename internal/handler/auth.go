@@ -113,22 +113,15 @@ func HandleRegister(pool *tenant.PoolManager) http.HandlerFunc {
 		}
 
 		insertSQL, args := query.BuildInsert(table.Name, body)
-		res, err := dbPool.Exec(r.Context(), insertSQL, args...)
+		row, err := insertRow(r.Context(), dbPool, cfg, table, insertSQL, args)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusBadRequest, fmt.Sprintf("registration failed: %v", err))
-			return
-		}
-
-		row, err := readInsertedRow(r, dbPool, table, res, cfg)
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if row == nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no result returned"})
 			return
 		}
-		emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpInsert, []map[string]any{row})
 		sendVerificationOnRegister(r, dbPool, cfg, email)
 		writeJSON(w, http.StatusCreated, map[string]any{"data": row})
 	}

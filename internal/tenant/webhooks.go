@@ -109,3 +109,32 @@ func EmitWebhooks(ctx context.Context, q Querier, cfg *TenantConfig, table, op s
 func WebhookName(function string) (string, bool) {
 	return strings.CutPrefix(function, WebhookJobPrefix)
 }
+
+// WriteWithWebhooks runs write (which changes table and returns the
+// changed rows) and queues the webhooks for them atomically: when q is a
+// plain pool and a webhook wants op on table, both run in one transaction,
+// so a delivery exists exactly when the change commits. Inside a caller's
+// transaction they simply join it.
+func WriteWithWebhooks(ctx context.Context, q Querier, cfg *TenantConfig, table, op string, write func(Querier) ([]map[string]any, error)) ([]map[string]any, error) {
+	db, isPool := q.(*DB)
+	if !isPool || !cfg.WantsWebhook(table, op) {
+		rows, err := write(q)
+		if err != nil {
+			return nil, err
+		}
+		return rows, EmitWebhooks(ctx, q, cfg, table, op, rows)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := write(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := EmitWebhooks(ctx, tx, cfg, table, op, rows); err != nil {
+		return nil, err
+	}
+	return rows, tx.Commit()
+}

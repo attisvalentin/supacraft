@@ -101,3 +101,45 @@ func writeTestTenant(dataDir, id, cfg string) error {
 	}
 	return os.WriteFile(filepath.Join(dataDir, "tenants", id+".json"), []byte(cfg), 0o644)
 }
+
+// A change whose delivery can't be queued is rolled back with it.
+func TestWriteWithWebhooks_Atomic(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	sqlDB.SetMaxOpenConns(1)
+	db := &DB{DB: sqlDB}
+	if _, err := sqlDB.Exec(`CREATE TABLE "orders" ("id" TEXT PRIMARY KEY, "x" TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &TenantConfig{
+		Schema:      Schema{Tables: []SchemaTable{{Name: "orders", Columns: []SchemaColumn{{Name: "id"}, {Name: "x"}}}}},
+		APISettings: APISettings{Webhooks: map[string]Webhook{"erp": {URL: "https://erp.example.com", Events: []string{"orders.insert"}}}},
+	}
+	write := func(payload any) func(Querier) ([]map[string]any, error) {
+		return func(q Querier) ([]map[string]any, error) {
+			if _, err := q.Exec(ctx, `INSERT INTO "orders" ("id") VALUES ('o1')`); err != nil {
+				return nil, err
+			}
+			return []map[string]any{{"id": "o1", "x": payload}}, nil
+		}
+	}
+	// A value JSON can't encode makes queueing fail.
+	if _, err := WriteWithWebhooks(ctx, db, cfg, "orders", OpInsert, write(make(chan int))); err == nil {
+		t.Fatal("expected the enqueue to fail")
+	}
+	var n int
+	if err := sqlDB.QueryRow(`SELECT COUNT(*) FROM "orders"`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the insert survived a failed enqueue: %d %v", n, err)
+	}
+	if _, err := WriteWithWebhooks(ctx, db, cfg, "orders", OpInsert, write("ok")); err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ := ListJobs(ctx, sqlDB, "", 10)
+	if err := sqlDB.QueryRow(`SELECT COUNT(*) FROM "orders"`).Scan(&n); err != nil || n != 1 || len(jobs) != 1 {
+		t.Fatalf("committed write: %d rows, %d deliveries", n, len(jobs))
+	}
+}

@@ -90,7 +90,9 @@ func HandleUpdate(pool *tenant.PoolManager) http.HandlerFunc {
 		// RETURNING reads the rows as changed, even when the change moves
 		// them out of the WHERE (status: pending → shipped).
 		updateSQL, args := query.BuildUpdate(table.Name, req.Data, whereSql, whereArgs)
-		results, err := queryRows(r.Context(), dbPool, cfg, updateSQL, args...)
+		results, err := tenant.WriteWithWebhooks(r.Context(), dbPool, cfg, table.Name, tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
+			return queryRows(r.Context(), q, cfg, updateSQL+" RETURNING *", args...)
+		})
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("update failed: %v", err))
 			return
@@ -100,7 +102,6 @@ func HandleUpdate(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpUpdate, results)
 		row := schema.FilterNonReadableFromRow(results[0], table)
 		writeJSON(w, http.StatusOK, map[string]any{"data": row})
 	}
