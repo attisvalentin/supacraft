@@ -241,3 +241,21 @@ func TestRun_Jobs(t *testing.T) {
 		}
 	}
 }
+
+// A secret JSON would escape (here "<") is still masked in a body diff.
+func TestRun_MasksEscapedSecrets(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "esc",
+  "api_settings": {"env": {"K": "${KEY}"}},
+  "functions": {"f": {"route": {"path": "/fn/f", "method": "GET"}, "steps": [{"type": "response", "data": {"k": "{{env.K}}"}}]}},
+  "tests": {"t": {"call": "GET /fn/f", "expect": {"body": {"k": "other"}}}}
+}`, "KEY=ab<cd&ef\n")
+	results, err := Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(append(results[0].Failures, results[0].Body), "\n")
+	if strings.Contains(all, `ab<cd`) || strings.Contains(all, "ab<cd") || !strings.Contains(all, "[secret KEY]") {
+		t.Fatalf("secret leaked or not masked: %s", all)
+	}
+}

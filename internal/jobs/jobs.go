@@ -99,7 +99,9 @@ func RunDue(ctx context.Context, cfg *tenant.TenantConfig, db *tenant.DB, tenant
 		case tenant.JobFailed:
 			logFailed(ctx, tenantID, j, runErr)
 		case tenant.JobPending:
-			slog.Info("job will retry", "tenant", tenantID, "job", j.ID, "function", j.Function, "attempt", j.Attempts, "error", runErr)
+			// The error can quote resolved secrets; it is kept with the job
+			// (masked when read), not in the server log.
+			slog.Info("job will retry", "tenant", tenantID, "job", j.ID, "function", j.Function, "attempt", j.Attempts)
 		}
 	}
 	return len(claimed), nil
@@ -114,7 +116,7 @@ func logFailed(ctx context.Context, tenantID string, j tenant.Job, runErr error)
 	} else if errorlog.Global != nil {
 		errorlog.Global.Log(tenantID, "JOB", j.Function, http.StatusInternalServerError, msg)
 	}
-	slog.Warn("job failed", "tenant", tenantID, "job", j.ID, "function", j.Function, "error", runErr)
+	slog.Warn("job failed; see supacraft jobs list", "tenant", tenantID, "job", j.ID, "function", j.Function)
 }
 
 // Worker runs the jobs of every tenant a server serves. It scans all

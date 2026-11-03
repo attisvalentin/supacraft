@@ -195,7 +195,7 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 		if err != nil {
 			fail("jobs: %v", err)
 		} else {
-			for _, diff := range match("jobs", any(t.Expect.Jobs), got) {
+			for _, diff := range match("jobs", handler.MaskValue(any(t.Expect.Jobs), env), handler.MaskValue(any(got), env)) {
 				fail("%s", diff)
 			}
 		}
@@ -209,7 +209,9 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			fail("response is not JSON: %s", oneLine(rec.Body.String()))
 		} else {
-			for _, diff := range match("body", t.Expect.Body, got) {
+			// Masked before match quotes values: JSON escaping would hide a
+			// secret from masking afterwards.
+			for _, diff := range match("body", handler.MaskValue(t.Expect.Body, env), handler.MaskValue(got, env)) {
 				fail("%s", diff)
 			}
 		}

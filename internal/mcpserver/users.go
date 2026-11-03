@@ -165,7 +165,7 @@ func (s *server) enqueueJob(ctx context.Context, req *mcp.CallToolRequest, onSer
 			action:  []string{"enqueue_job", t.where, id, function, string(argsJSON), fmt.Sprint(delay)},
 			message: fmt.Sprintf("An AI agent wants to run the function %q as a background job in %s on %s (production) with args %s. Approve only if you asked for this.", function, id, t.where, argsJSON),
 			title:   fmt.Sprintf("Run %s on %s", function, t.where),
-			command: shellCommand("supacraft", "jobs", "enqueue", function, "--args", string(argsJSON), t.cliFlag()),
+			command: shellCommand("supacraft", "jobs", "enqueue", function, "--args", string(argsJSON), fmt.Sprintf("--delay=%d", delay), t.cliFlag()),
 		}); !ok {
 			return res, nil, nil
 		}
