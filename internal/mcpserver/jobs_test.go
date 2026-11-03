@@ -115,11 +115,6 @@ func TestJobTools_ServerNeedsApproval(t *testing.T) {
 		}
 		return res.Content[0].(*mcp.TextContent).Text
 	}
-	answer := func(action string, approve bool) func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
-		return func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
-			return &mcp.ElicitResult{Action: action, Content: map[string]any{"approve": approve}}, nil
-		}
-	}
 	enqueue := map[string]any{"function": "work; rm -rf ~", "args": map[string]any{"x": "'quoted'"}, "server": true}
 	retry := map[string]any{"id": "job-1", "server": true}
 

@@ -1,4 +1,4 @@
-package cmd
+package service
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestGenerateUnit_QuotesPaths(t *testing.T) {
-	unit, err := generateUnit("/usr/local/bin/supacraft", "app", "/home/app", "/srv/my apps/100%$HOME", "--data-dir")
+	unit, err := GenerateUnit("/usr/local/bin/supacraft", "app", "/home/app", "/srv/my apps/100%$HOME", "--data-dir")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestGenerateUnit_QuotesPaths(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"/srv/a\nExecStartPre=/bin/evil", `/srv/a\`} {
-		if _, err := generateUnit("/bin/sc", "app", "/home/app", bad, "--dir"); err == nil {
+		if _, err := GenerateUnit("/bin/sc", "app", "/home/app", bad, "--dir"); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
 	}

@@ -51,8 +51,12 @@ user the command or step it returns: locally they add NAME=value to .env; for a 
 Deploying: a central server is production. Deploy only when the user asks. First run "supacraft deploy --dry-run"
 and report its result (migrations, warnings, missing secrets); run "supacraft deploy" only after the user confirms.
 A deploy sends supacraft.json; secret values stay on the server. After a deploy, get_server_errors shows what fails
-in production and list_tenants shows every API on the server. Disabling or removing a tenant is the user's call:
-give them "supacraft tenants disable|enable|remove <id>" instead of running it.
+in production and list_tenants shows every API on the server.
+
+You can do what the user can do with the CLI: deploy, manage_tenant, unset_secret, seed reset, service, retry/enqueue
+jobs and set_user_role. Changes to a central server and destructive actions show the user an approval prompt you
+cannot answer; only call them when the user asked for that change. The one thing you never do is handle secret
+values: the user sets them with "supacraft secrets set NAME".
 
 Background work: a job.enqueue step runs a PRIVATE function later with retries; get_jobs shows the queue,
 enqueue_job and retry_job act on it.
@@ -69,6 +73,10 @@ type Options struct {
 	// Reload is called after a successful apply so an in-process API server
 	// sees the new config immediately. May be nil.
 	Reload func(context.Context)
+	// Started starts the API once init_project created the project (the
+	// server was started in a directory without one) and returns its
+	// Reload. May be nil.
+	Started func(context.Context) (func(context.Context), error)
 }
 
 type server struct {
@@ -253,22 +261,11 @@ func (s *server) register(srv *mcp.Server) {
 			return jsonResult(map[string]any{"passed": passed, "failed": len(results) - passed, "results": results}), nil, nil
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "seed", Description: "Add the seed data to the local database (users by email and rows by primary key that already exist are kept). It never deletes; to start over the user runs `supacraft seed --reset`."},
-		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			p, err := project.Load(s.opts.Dir)
-			if err != nil {
-				return nil, nil, err
-			}
-			res, err := testrun.SeedLocal(ctx, p, false)
-			if err != nil {
-				return nil, nil, err
-			}
-			if s.opts.Reload != nil {
-				s.opts.Reload(ctx)
-			}
-			return jsonResult(res), nil, nil
+	mcp.AddTool(srv, &mcp.Tool{Name: "seed", Description: "Load the seed data into the local database: users (by email) and rows (by primary key) already there are kept. reset: true first deletes every row of the project's tables (users included); the user must approve that in a prompt you cannot answer."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Reset bool `json:"reset,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.seed(ctx, req, in.Reset)
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete_cronjob", Description: "Delete a cronjob by name."},
@@ -326,14 +323,15 @@ func (s *server) register(srv *mcp.Server) {
 			return s.getLogs(ctx, in.Limit)
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_server_errors", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Recent unexpected errors (5xx) of this project's tenant on the central server (SUPACRAFT_SERVER), newest first, with the internal message; secret values are masked. Use it after a deploy to see what failed in production; get_logs covers the local API."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_server_errors", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Recent unexpected errors (5xx) of this project's tenant (or another one: tenant) on the central server (SUPACRAFT_SERVER), newest first, with the internal message; secret values are masked. Use it after a deploy to see what failed in production; get_logs covers the local API."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
-			Limit int `json:"limit,omitempty"`
+			Limit  int    `json:"limit,omitempty"`
+			Tenant string `json:"tenant,omitempty" jsonschema:"another tenant id on the server; default this project's"`
 		}) (*mcp.CallToolResult, any, error) {
 			if in.Limit <= 0 {
 				in.Limit = 20
 			}
-			return s.serverErrors(ctx, in.Limit)
+			return s.serverErrors(ctx, in.Tenant, in.Limit)
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "list_tenants", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "List every tenant (API) on the central server (SUPACRAFT_SERVER): id, name, enabled/disabled, table/function/cron counts, database size, last update. Read-only."},
@@ -408,6 +406,51 @@ func (s *server) register(srv *mcp.Server) {
 			Server bool   `json:"server,omitempty"`
 		}) (*mcp.CallToolResult, any, error) {
 			return s.setUserRole(ctx, req, in.Server, in.Email, in.Role)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "deploy", Description: "Deploy supacraft.json to the central server (SUPACRAFT_SERVER). dry_run: true shows the migrations, warnings and missing secrets without changing anything and needs no approval — always do it first and report it. A real deploy needs the user's approval in a prompt you cannot answer, for exactly the current file. Missing secrets are returned by name: the user sets them with `supacraft secrets set NAME`."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			DryRun              bool `json:"dry_run,omitempty"`
+			Replace             bool `json:"replace,omitempty" jsonschema:"replace a tenant with the same id from another project"`
+			AllowMissingSecrets bool `json:"allow_missing_secrets,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.deploy(ctx, req, in.DryRun, in.Replace, in.AllowMissingSecrets)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "manage_tenant", Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)}, Description: "Disable, enable or remove a tenant on the central server (default: this project's). disable: requests get 503 and cron/jobs pause; remove: no longer served, data kept; remove with purge: true also deletes its database, files and secrets for good. Every action needs the user's approval in a prompt you cannot answer."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Action string `json:"action" jsonschema:"disable | enable | remove"`
+			Tenant string `json:"tenant,omitempty"`
+			Purge  bool   `json:"purge,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			if in.Purge && in.Action != "remove" {
+				return nil, nil, errors.New("purge only applies to remove")
+			}
+			return s.tenantAction(ctx, req, in.Tenant, in.Action, in.Purge)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "unset_secret", Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)}, Description: "Delete a secret of this project's tenant on the central server, after the user approves in a prompt you cannot answer. Setting a secret stays with the user (`supacraft secrets set NAME`): its value must never pass through you."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Name string `json:"name"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.unsetSecret(ctx, req, in.Name)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "service", Description: "The SupaCraft systemd service on this machine (Linux): status needs nothing; install (serving this project, or data_dir for a central server) and uninstall need the user's approval in a prompt you cannot answer, and sudo without a password."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Action  string `json:"action" jsonschema:"status | install | uninstall"`
+			DataDir string `json:"data_dir,omitempty"`
+		}) (*mcp.CallToolResult, any, error) {
+			return s.serviceAction(ctx, req, in.Action, in.DataDir)
+		})
+
+	mcp.AddTool(srv, &mcp.Tool{Name: "init_project", Description: "Create a new SupaCraft project (supacraft.json, .env, .gitignore, .mcp.json) in this directory when it has none, and start its API."},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
+			Name string `json:"name"`
+			Auth *bool  `json:"auth,omitempty" jsonschema:"built-in user auth, default true"`
+		}) (*mcp.CallToolResult, any, error) {
+			auth := in.Auth == nil || *in.Auth
+			return s.initProject(ctx, in.Name, auth)
 		})
 
 	mcp.AddTool(srv, &mcp.Tool{Name: "check_secrets", Description: "List the \"${NAME}\" secrets the project references and which are set — on the central server when SUPACRAFT_SERVER is configured, otherwise in .env. Returns names only, never values, plus the command the user runs to set a missing one. Never ask the user for a secret value in chat."},
