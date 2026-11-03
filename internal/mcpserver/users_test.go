@@ -66,7 +66,7 @@ func TestSetUserRole_NeedsUserApproval(t *testing.T) {
 		}
 		return res.Content[0].(*mcp.TextContent).Text
 	}
-	answer := func(action string, content map[string]any) func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+	answerWith := func(action string, content map[string]any) func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
 		return func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
 			return &mcp.ElicitResult{Action: action, Content: content}, nil
 		}
@@ -74,8 +74,8 @@ func TestSetUserRole_NeedsUserApproval(t *testing.T) {
 
 	for name, h := range map[string]func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error){
 		"no elicitation support": nil,
-		"declined":               answer("decline", nil),
-		"accepted unticked":      answer("accept", map[string]any{"approve": false}),
+		"declined":               answerWith("decline", nil),
+		"accepted unticked":      answerWith("accept", map[string]any{"approve": false}),
 	} {
 		out := setRole(h)
 		if got := role(); got != "user" {
@@ -91,7 +91,7 @@ func TestSetUserRole_NeedsUserApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, &mcp.ClientOptions{
-		ElicitationHandler: answer("decline", nil),
+		ElicitationHandler: answerWith("decline", nil),
 		MultiRoundTrip:     &mcp.MultiRoundTripOptions{Disabled: true},
 	})
 	cs, err := client.Connect(ctx, ct, nil)
@@ -112,7 +112,7 @@ func TestSetUserRole_NeedsUserApproval(t *testing.T) {
 		t.Fatalf("unprompted approval changed the role to %q", got)
 	}
 
-	if out := setRole(answer("accept", map[string]any{"approve": true})); role() != "admin" {
+	if out := setRole(answerWith("accept", map[string]any{"approve": true})); role() != "admin" {
 		t.Fatalf("approved change not applied: %s", out)
 	}
 }

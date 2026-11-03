@@ -47,13 +47,13 @@ func (s *server) listTenants(ctx context.Context) (*mcp.CallToolResult, any, err
 		"server":       srv,
 		"this_project": p.TenantID(),
 		"tenants":      out.Data,
-		"note":         "Disabling or removing a tenant is done by the user with `supacraft tenants disable|enable|remove <id> --server " + srv + "`; suggest the command, don't run it.",
+		"note":         "manage_tenant disables, enables or removes a tenant once the user approves; get_server_errors takes a tenant id.",
 	}), nil, nil
 }
 
-// serverErrors reads the recent API errors of this project's tenant on the
-// central server. Secret values are masked by the server.
-func (s *server) serverErrors(ctx context.Context, limit int) (*mcp.CallToolResult, any, error) {
+// serverErrors reads the recent API errors of a tenant (default: this
+// project's) on the central server. Secret values are masked by the server.
+func (s *server) serverErrors(ctx context.Context, id string, limit int) (*mcp.CallToolResult, any, error) {
 	c, p, srv, err := s.centralClient()
 	if err != nil {
 		return nil, nil, err
@@ -62,9 +62,12 @@ func (s *server) serverErrors(ctx context.Context, limit int) (*mcp.CallToolResu
 		Data  []errorlog.LogEntry `json:"data"`
 		Total int                 `json:"total"`
 	}
-	path := fmt.Sprintf("/admin/tenants/%s/errors?limit=%d", url.PathEscape(p.TenantID()), min(max(limit, 1), 200))
+	if id == "" {
+		id = p.TenantID()
+	}
+	path := fmt.Sprintf("/admin/tenants/%s/errors?limit=%d", url.PathEscape(id), min(max(limit, 1), 200))
 	if err := c.Do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, nil, err
 	}
-	return jsonResult(map[string]any{"server": srv, "tenant": p.TenantID(), "data": out.Data, "total": out.Total}), nil, nil
+	return jsonResult(map[string]any{"server": srv, "tenant": id, "data": out.Data, "total": out.Total}), nil, nil
 }
