@@ -526,3 +526,54 @@ func TestValidate_SeedAndTestShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_JobEnqueueAndFunctionNames(t *testing.T) {
+	p := load(t, `{"name": "x", "functions": {
+	  "public": {"route": {"path": "/fn/p", "method": "POST"}, "steps": [
+	    {"type": "job.enqueue", "function_id": "public"},
+	    {"type": "job.enqueue", "function_id": "ghost"},
+	    {"type": "job.enqueue", "function_id": "worker", "delay": -1, "max_attempts": 50},
+	    {"type": "job.enqueue", "function_id": "worker", "delay": "{{request.wait}}", "max_attempts": 3}]},
+	  "worker": {"route": {"path": "", "method": "PRIVATE"}, "steps": [{"type": "response", "data": {}}]},
+	  "bad.name": {"route": {"path": "", "method": "PRIVATE"}, "steps": [{"type": "response", "data": {}}]}}}`)
+	got := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+		}
+	}
+	for _, want := range []string{
+		"functions.public.steps[0].function_id", "functions.public.steps[1].function_id",
+		"functions.public.steps[2].delay", "functions.public.steps[2].max_attempts", "functions.bad.name",
+	} {
+		if !got[want] {
+			t.Errorf("missing error at %s (got %v)", want, got)
+		}
+	}
+	for _, ok := range []string{"functions.public.steps[3].delay", "functions.public.steps[3].max_attempts"} {
+		if got[ok] {
+			t.Errorf("valid setting rejected: %s", ok)
+		}
+	}
+}
+
+func TestValidate_RunJobsAndExpectJobs(t *testing.T) {
+	p := load(t, `{"name": "x",
+	  "functions": {"w": {"route": {"path": "", "method": "PRIVATE"}, "steps": [{"type": "response", "data": {}}]}},
+	  "tests": {"t": {"call": "POST /fn/x", "run_jobs": "yes",
+	    "expect": {"jobs": [null, "w", {"function": 5}, {"function": "ghost"}, {"function": "w", "status": "done"}]}}}}`)
+	got := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+		}
+	}
+	for _, want := range []string{"tests.t.run_jobs", "tests.t.expect.jobs[0]", "tests.t.expect.jobs[1]", "tests.t.expect.jobs[2].function", "tests.t.expect.jobs[3].function"} {
+		if !got[want] {
+			t.Errorf("missing error at %s (got %v)", want, got)
+		}
+	}
+	if got["tests.t.expect.jobs[4]"] || got["tests.t.expect.jobs[4].function"] {
+		t.Error("a valid job expectation was rejected")
+	}
+}

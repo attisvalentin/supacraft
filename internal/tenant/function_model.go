@@ -146,6 +146,10 @@ type FunctionStep struct {
 	// function.call
 	FunctionID string         `json:"function_id,omitempty"`
 	Args       map[string]any `json:"args,omitempty"`
+	// job.enqueue: seconds to wait (number or template) and how often to
+	// try before the job fails.
+	Delay       any `json:"delay,omitempty"`
+	MaxAttempts int `json:"max_attempts,omitempty"`
 
 	// http.request
 	URL         string    `json:"url,omitempty"`

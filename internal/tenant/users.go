@@ -37,34 +37,45 @@ func (e *UnknownRoleError) Error() string {
 	return fmt.Sprintf("unknown role %q (defined: %s)", e.Role, strings.Join(e.Roles, ", "))
 }
 
-// openUsers opens a tenant's database in dataDir (a central data directory
-// or a project's .supacraft) and returns its auth settings. A running
-// server can keep serving meanwhile: SQLite WAL allows a second writer to
-// wait its turn.
+// openUsers is OpenTenantDB for a tenant with auth, returning its auth
+// settings.
 func openUsers(ctx context.Context, dataDir, id string) (*sql.DB, AuthSettings, error) {
-	if !ValidTenantID(id) {
-		return nil, AuthSettings{}, ErrTenantNotFound
-	}
-	store := &FileStore{dir: filepath.Join(dataDir, "tenants")}
-	cfg, err := store.GetTenantConfig(ctx, id)
+	db, cfg, err := OpenTenantDB(ctx, dataDir, id)
 	if err != nil {
 		return nil, AuthSettings{}, err
 	}
 	if !cfg.AuthEnabled {
+		db.Close()
 		return nil, AuthSettings{}, ErrNoRoles
 	}
-	u := url.URL{Scheme: "file", Path: filepath.Join(dataDir, cfg.DBName+".db"), RawQuery: "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"}
-	db, err := sql.Open("sqlite", u.String())
-	if err != nil {
-		return nil, AuthSettings{}, err
-	}
-	db.SetMaxOpenConns(1)
 	// The role column may be newer than the database.
 	if err := ensureAuthSchema(ctx, db); err != nil {
 		db.Close()
 		return nil, AuthSettings{}, err
 	}
 	return db, cfg.APISettings.Auth, nil
+}
+
+// OpenTenantDB opens a tenant's database in dataDir (a central data
+// directory or a project's .supacraft) for an operator command, with its
+// config. A running server can keep serving meanwhile: SQLite WAL lets a
+// second writer wait its turn.
+func OpenTenantDB(ctx context.Context, dataDir, id string) (*sql.DB, *TenantConfig, error) {
+	if !ValidTenantID(id) {
+		return nil, nil, ErrTenantNotFound
+	}
+	store := &FileStore{dir: filepath.Join(dataDir, "tenants")}
+	cfg, err := store.GetTenantConfig(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	u := url.URL{Scheme: "file", Path: filepath.Join(dataDir, cfg.DBName+".db"), RawQuery: "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, nil, err
+	}
+	db.SetMaxOpenConns(1)
+	return db, cfg, nil
 }
 
 const userColumns = `"id", "email", "role", COALESCE("is_active", 1), COALESCE("email_verified", 0), COALESCE("created_at", '')`

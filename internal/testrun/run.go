@@ -22,6 +22,7 @@ import (
 	"github.com/attisvalentin/supacraft/internal/config"
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/handler"
+	"github.com/attisvalentin/supacraft/internal/jobs"
 	"github.com/attisvalentin/supacraft/internal/pipeline"
 	"github.com/attisvalentin/supacraft/internal/project"
 	"github.com/attisvalentin/supacraft/internal/query"
@@ -134,7 +135,13 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 	}
 
 	res := &Result{Name: name}
-	fail := func(format string, args ...any) { res.Failures = append(res.Failures, fmt.Sprintf(format, args...)) }
+	// .env values end up in URLs and error messages, and results are shown
+	// to agents: mask them like the server error log does, before
+	// shortening, so no part of a value survives.
+	mask := func(s string) string { return handler.MaskSecrets(s, env) }
+	fail := func(format string, args ...any) {
+		res.Failures = append(res.Failures, oneLine(mask(fmt.Sprintf(format, args...))))
+	}
 
 	method, path, ok := project.ParseCall(t.Call)
 	if _, err := url.ParseRequestURI(path); !ok || err != nil {
@@ -178,6 +185,22 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 	handler.NewRouter(tenant.NewCachedStore(store), pools, errLog, cfg).ServeHTTP(rec, req)
 	res.Status = rec.Code
 
+	if t.RunJobs {
+		if err := runJobs(req.Context(), pools, tcfg, id, db); err != nil {
+			fail("run_jobs: %v", err)
+		}
+	}
+	if t.Expect.Jobs != nil {
+		got, err := queuedJobs(ctx, db)
+		if err != nil {
+			fail("jobs: %v", err)
+		} else {
+			for _, diff := range match("jobs", handler.MaskValue(any(t.Expect.Jobs), env), handler.MaskValue(any(got), env)) {
+				fail("%s", diff)
+			}
+		}
+	}
+
 	if t.Expect.Status != 0 && rec.Code != t.Expect.Status {
 		fail("status %d, want %d", rec.Code, t.Expect.Status)
 	}
@@ -186,7 +209,9 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			fail("response is not JSON: %s", oneLine(rec.Body.String()))
 		} else {
-			for _, diff := range match("body", t.Expect.Body, got) {
+			// Masked before match quotes values: JSON escaping would hide a
+			// secret from masking afterwards.
+			for _, diff := range match("body", handler.MaskValue(t.Expect.Body, env), handler.MaskValue(got, env)) {
 				fail("%s", diff)
 			}
 		}
@@ -214,17 +239,11 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 
 	res.Passed = len(res.Failures) == 0
 	if !res.Passed {
-		res.Body = oneLine(rec.Body.String())
-	}
-	// .env values end up in URLs and error messages; results are shown to
-	// agents, so mask them like the server error log does.
-	for i := range res.Failures {
-		res.Failures[i] = handler.MaskSecrets(res.Failures[i], env)
+		res.Body = oneLine(mask(rec.Body.String()))
 	}
 	for i := range res.ServerErrors {
-		res.ServerErrors[i] = handler.MaskSecrets(res.ServerErrors[i], env)
+		res.ServerErrors[i] = mask(res.ServerErrors[i])
 	}
-	res.Body = handler.MaskSecrets(res.Body, env)
 	return res, nil
 }
 
@@ -252,6 +271,48 @@ func localStorageOnly(dir, id string) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+// runJobs runs every queued job now, in the test's sandbox, including the
+// jobs those queue and retries of failed runs, until none is left.
+func runJobs(ctx context.Context, pools *tenant.PoolManager, cfg *tenant.TenantConfig, id string, db *sql.DB) error {
+	tdb, err := pools.GetPool(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	for round := 0; round < 100; round++ {
+		if _, err := db.ExecContext(ctx, `UPDATE "_supacraft_jobs" SET "run_at" = 0 WHERE "status" = ?`, tenant.JobPending); err != nil {
+			if strings.Contains(err.Error(), "no such table") {
+				return nil
+			}
+			return err
+		}
+		n, err := jobs.RunDue(ctx, cfg, tdb, id)
+		if err != nil || n == 0 {
+			return err
+		}
+	}
+	return errors.New("jobs kept queueing jobs (stopped after 100 rounds)")
+}
+
+// queuedJobs lists the test database's jobs, oldest first.
+func queuedJobs(ctx context.Context, db *sql.DB) ([]any, error) {
+	list, err := tenant.ListJobs(ctx, db, "", 1000)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]any, len(list))
+	for i, j := range list {
+		args := map[string]any{}
+		for k, v := range j.Args {
+			args[k] = v
+		}
+		out[len(list)-1-i] = map[string]any{
+			"function": j.Function, "args": args, "status": j.Status,
+			"attempts": float64(j.Attempts), "last_error": j.LastError,
+		}
+	}
+	return out, nil
 }
 
 // signIn issues an access token for a seed user, as /auth/login would.
@@ -340,9 +401,10 @@ func match(path string, want, got any) []string {
 	return nil
 }
 
+// show renders a value for a failure message; fail masks and shortens it.
 func show(v any) string {
 	data, _ := json.Marshal(v)
-	return oneLine(string(data))
+	return string(data)
 }
 
 func oneLine(s string) string {

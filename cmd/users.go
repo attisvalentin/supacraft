@@ -42,7 +42,7 @@ var usersListCmd = &cobra.Command{
 	Short: "List users with their roles",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		t, id, err := usersTarget()
+		t, id, err := projectTarget(usersTenant, usersLocal)
 		if err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ var usersSetRoleCmd = &cobra.Command{
 	Short: "Give a user one of the roles in api_settings.auth.roles",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		t, id, err := usersTarget()
+		t, id, err := projectTarget(usersTenant, usersLocal)
 		if err != nil {
 			return err
 		}
@@ -115,32 +115,33 @@ func init() {
 	rootCmd.AddCommand(usersCmd)
 }
 
-// usersTarget is tenantsTarget, falling back to (or with --local, forcing)
-// the project's .supacraft directory, plus the tenant id to act on.
-func usersTarget() (*tenantsTargetInfo, string, error) {
+// projectTarget is tenantsTarget, falling back to (or with local, forcing)
+// the project's .supacraft directory, plus the tenant id to act on (the
+// project's unless tenantFlag names one).
+func projectTarget(tenantFlag string, local bool) (*tenantsTargetInfo, string, error) {
 	p, perr := loadProject()
-	id := usersTenant
+	id := tenantFlag
 	if id == "" && perr == nil {
 		id = p.TenantID()
 	}
 	if id == "" {
 		return nil, "", errors.New("pass --tenant <id> or run in the project directory")
 	}
-	local := func() (*tenantsTargetInfo, string, error) {
+	useLocal := func() (*tenantsTargetInfo, string, error) {
 		if perr != nil {
 			return nil, "", perr
 		}
 		return &tenantsTargetInfo{dataDir: p.DataDir(), where: "the local project"}, id, nil
 	}
-	if usersLocal {
+	if local {
 		if tenantsServer != "" || tenantsDataDir != "" {
 			return nil, "", errors.New("--local can't be combined with --server or --data-dir")
 		}
-		return local()
+		return useLocal()
 	}
 	t, err := tenantsTarget()
 	if errors.Is(err, errNoTarget) {
-		return local()
+		return useLocal()
 	}
 	if err != nil {
 		return nil, "", err

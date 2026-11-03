@@ -199,3 +199,63 @@ func TestEmptySections(t *testing.T) {
 		t.Fatalf("%v %v", results, err)
 	}
 }
+
+func TestRun_Jobs(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "jobs",
+  "schema": {"tables": [{"name": "orders", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "invoiced", "type": "boolean"}]}]},
+  "api_settings": {"email": {"smtp": {"enabled": true, "provider": "smtp", "host": "smtp.example.com", "port": 587, "username": "u", "password": "p", "encryption": "tls", "from_email": "a@example.com", "from_name": "A"}}},
+  "functions": {
+    "checkout": {"route": {"path": "/fn/checkout", "method": "POST"}, "steps": [
+      {"type": "transaction", "steps": [
+        {"type": "db.insert", "table": "orders", "data": {"invoiced": false}, "assign": "order"},
+        {"type": "job.enqueue", "function_id": "invoice", "args": {"order_id": "{{order.id}}"}, "delay": 600}
+      ]},
+      {"type": "response", "data": {"ok": true}}]},
+    "invoice": {"route": {"path": "", "method": "PRIVATE"}, "steps": [
+      {"type": "db.update", "table": "orders", "where": {"id": "{{args.order_id}}"}, "data": {"invoiced": true}},
+      {"type": "email.send", "mode": "raw", "to": ["billing@example.com"], "subject": "Invoice", "text": "{{args.order_id}}"}]},
+    "flaky": {"route": {"path": "/fn/flaky", "method": "POST"}, "steps": [
+      {"type": "job.enqueue", "function_id": "boom", "max_attempts": 2}, {"type": "response", "data": {}}]},
+    "boom": {"route": {"path": "", "method": "PRIVATE"}, "steps": [{"type": "fail", "message": "always fails"}]}
+  },
+  "tests": {
+    "queued, not run": {"call": "POST /fn/checkout", "expect": {"status": 200, "emails": 0,
+      "jobs": [{"function": "invoice", "status": "pending"}], "db": {"orders": {"where": {"invoiced": false}, "count": 1}}}},
+    "run": {"call": "POST /fn/checkout", "run_jobs": true, "expect": {"status": 200, "emails": 1,
+      "jobs": [{"function": "invoice", "status": "done", "attempts": 1}], "db": {"orders": {"where": {"invoiced": true}, "count": 1}}}},
+    "retried then failed": {"call": "POST /fn/flaky", "run_jobs": true, "expect": {"status": 200,
+      "jobs": [{"function": "boom", "status": "failed", "attempts": 2}]}}
+  }
+}`, "")
+	results, err := Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if !r.Passed {
+			t.Errorf("%s: %v %v %s", r.Name, r.Failures, r.ServerErrors, r.Body)
+		}
+		if r.Name == "retried then failed" && (len(r.ServerErrors) != 1 || !strings.Contains(r.ServerErrors[0], "always fails")) {
+			t.Errorf("failed job not reported: %v", r.ServerErrors)
+		}
+	}
+}
+
+// A secret JSON would escape (here "<") is still masked in a body diff.
+func TestRun_MasksEscapedSecrets(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "esc",
+  "api_settings": {"env": {"K": "${KEY}"}},
+  "functions": {"f": {"route": {"path": "/fn/f", "method": "GET"}, "steps": [{"type": "response", "data": {"k": "{{env.K}}"}}]}},
+  "tests": {"t": {"call": "GET /fn/f", "expect": {"body": {"k": "other"}}}}
+}`, "KEY=ab<cd&ef\n")
+	results, err := Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(append(results[0].Failures, results[0].Body), "\n")
+	if strings.Contains(all, `ab<cd`) || strings.Contains(all, "ab<cd") || !strings.Contains(all, "[secret KEY]") {
+		t.Fatalf("secret leaked or not masked: %s", all)
+	}
+}

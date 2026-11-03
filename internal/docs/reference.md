@@ -259,9 +259,9 @@ Give users a role and limit endpoints to some roles (needs `auth_enabled: true`)
 }
 ```
 
-- The key is the function name; `function.call` refers to it via `function_id`
+- The key is the function name (letters, digits, `_`, `-`; at most 64); `function.call` and `job.enqueue` refer to it via `function_id`
 - `method`: `GET | POST | PUT | PATCH | DELETE | PRIVATE`
-- `PRIVATE` functions are only callable via `function.call`, not via HTTP
+- `PRIVATE` functions are not served over HTTP; they run through `function.call`, as background jobs (`job.enqueue`, `supacraft jobs enqueue`, MCP `enqueue_job`) or from cron steps
 - `roles`: optional; only users with one of these roles may call the function (implies `auth_required`, see Roles)
 - `url_params`: optional, GET only. Key = param name, value = default (empty = required). Omit for unrestricted params.
 
@@ -548,6 +548,24 @@ No-op in cronjob context.
 ```
 Called function receives args as `{{args.user_id}}`, `{{args.amount}}`. Max recursion depth: 10.
 
+### job.enqueue
+Runs a `PRIVATE` function later, in the background, without making the request wait — for slow or unreliable work (emails, third-party APIs, invoices).
+```json
+{
+  "type": "job.enqueue",
+  "function_id": "send_invoice",
+  "args": { "order_id": "{{order.id}}" },
+  "delay": 60,
+  "max_attempts": 5,
+  "assign": "job"
+}
+```
+- The function must be `PRIVATE`. It gets `{{args.*}}`, `{{env.*}}`, `{{now}}` and `{{job.id}}` / `{{job.attempt}}`; there is no request or `auth.*`, so pass what it needs (e.g. the user id) in `args`.
+- `delay`: seconds (0–2592000, or a template); default 0. `max_attempts`: 1–20, default 5. `assign` gets `{id}`.
+- A run that fails (any error or a `fail` step) is retried after 30s, 1m, 2m, … (at most 1h) until `max_attempts`; then the job is `failed` and the error goes to the error log. Design job functions to be safe to run again.
+- Inside a `transaction` step the job is queued only if the transaction commits.
+- Jobs are stored in the tenant database and survive restarts. They run where cron runs (`dev`, `serve`; not with `--no-cron` or `DISABLE_CRON`). Finished jobs are kept 7 days. `supacraft jobs list [--status failed]`, `supacraft jobs retry <id>` and `supacraft jobs enqueue <function> --args {...}` (MCP: `get_jobs`, `retry_job`, `enqueue_job`; on a central server the MCP tools ask the user to approve) show, retry and queue them.
+
 ### http.request
 ```json
 {
@@ -611,6 +629,7 @@ The response is stored under `assign`: a JSON object response as itself plus `__
 | `query.*` | Yes | No |
 | `params.*` | Yes (path parameters) | No |
 | `env.*` | Yes | Yes |
+| `args.*`, `job.id`, `job.attempt` | In functions run by `function.call` (`args`) or as a job | No |
 
 ---
 
@@ -734,6 +753,8 @@ Each test sends one request to the API on its **own fresh database holding the s
 | `expect.body` | Fields that must match; other fields are ignored, arrays must have the same length. |
 | `expect.emails` | How many emails were sent. Emails are captured, never delivered. |
 | `expect.db` | After the request, `count` rows of the table match `where` (same filter operators as `/query`). |
+| `run_jobs` | `true` runs the jobs the request queued (and the jobs those queue, and retries), ignoring `delay`, before the checks. Without it jobs stay `pending`. |
+| `expect.jobs` | The queued jobs in order, each matched like `body` against `{function, args, status, attempts, last_error}`, e.g. `[{"function": "send_invoice", "status": "done"}]`. |
 
 A failed test reports the differences, the internal server error (if any) and the response. Write tests for every function you add, including the failure cases (missing auth, wrong role, invalid input).
 

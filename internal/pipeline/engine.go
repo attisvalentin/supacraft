@@ -104,6 +104,8 @@ func executeStep(ctx context.Context, step *tenant.FunctionStep, pCtx *PipelineC
 		return ExecuteResponse(ctx, step, pCtx, deps)
 	case "function.call":
 		return ExecuteFunctionCall(ctx, step, pCtx, deps)
+	case "job.enqueue":
+		return ExecuteJobEnqueue(ctx, step, pCtx, deps)
 	case "http.request":
 		return ExecuteHTTPRequest(ctx, step, pCtx, deps)
 	case "email.send":
