@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/attisvalentin/supacraft/internal/config"
-	"github.com/attisvalentin/supacraft/internal/pipeline"
 	"github.com/attisvalentin/supacraft/internal/secrets"
 	"github.com/attisvalentin/supacraft/internal/tenant"
 	"github.com/go-chi/chi/v5"
@@ -82,14 +80,14 @@ func HandleJobEnqueue(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 		var req EnqueueRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Function == "" || req.Delay < 0 || time.Duration(req.Delay)*time.Second > pipeline.MaxJobDelay {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Function == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body must be {\"function\", \"args\"?, \"delay\"? (0-2592000 seconds)}"})
 			return
 		}
-		jobID, err := tenant.EnqueueTenantJob(r.Context(), cfg.DataDir, id, req.Function, req.Args, time.Duration(req.Delay)*time.Second)
+		jobID, err := tenant.EnqueueTenantJob(r.Context(), cfg.DataDir, id, req.Function, req.Args, req.Delay)
 		var fnErr *tenant.JobFunctionError
 		switch {
-		case errors.As(err, &fnErr):
+		case errors.As(err, &fnErr), errors.Is(err, tenant.ErrJobDelay):
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		case err != nil:
 			writeTenantErr(w, r, err)
@@ -105,13 +103,33 @@ func maskJobs(dataDir, id string, list []tenant.Job) error {
 	if err != nil {
 		return err
 	}
+	MaskJobs(list, vals)
+	return nil
+}
+
+// MaskJobs masks secret values in job errors and args, nested ones too.
+func MaskJobs(list []tenant.Job, vals map[string]string) {
 	for i := range list {
 		list[i].LastError = MaskSecrets(list[i].LastError, vals)
 		for k, v := range list[i].Args {
-			if s, ok := v.(string); ok {
-				list[i].Args[k] = MaskSecrets(s, vals)
-			}
+			list[i].Args[k] = MaskValue(v, vals)
 		}
 	}
-	return nil
+}
+
+// MaskValue masks secret values in every string of a JSON value.
+func MaskValue(v any, vals map[string]string) any {
+	switch t := v.(type) {
+	case string:
+		return MaskSecrets(t, vals)
+	case map[string]any:
+		for k, x := range t {
+			t[k] = MaskValue(x, vals)
+		}
+	case []any:
+		for i, x := range t {
+			t[i] = MaskValue(x, vals)
+		}
+	}
+	return v
 }

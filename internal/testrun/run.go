@@ -135,7 +135,13 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 	}
 
 	res := &Result{Name: name}
-	fail := func(format string, args ...any) { res.Failures = append(res.Failures, fmt.Sprintf(format, args...)) }
+	// .env values end up in URLs and error messages, and results are shown
+	// to agents: mask them like the server error log does, before
+	// shortening, so no part of a value survives.
+	mask := func(s string) string { return handler.MaskSecrets(s, env) }
+	fail := func(format string, args ...any) {
+		res.Failures = append(res.Failures, oneLine(mask(fmt.Sprintf(format, args...))))
+	}
 
 	method, path, ok := project.ParseCall(t.Call)
 	if _, err := url.ParseRequestURI(path); !ok || err != nil {
@@ -231,17 +237,11 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 
 	res.Passed = len(res.Failures) == 0
 	if !res.Passed {
-		res.Body = oneLine(rec.Body.String())
-	}
-	// .env values end up in URLs and error messages; results are shown to
-	// agents, so mask them like the server error log does.
-	for i := range res.Failures {
-		res.Failures[i] = handler.MaskSecrets(res.Failures[i], env)
+		res.Body = oneLine(mask(rec.Body.String()))
 	}
 	for i := range res.ServerErrors {
-		res.ServerErrors[i] = handler.MaskSecrets(res.ServerErrors[i], env)
+		res.ServerErrors[i] = mask(res.ServerErrors[i])
 	}
-	res.Body = handler.MaskSecrets(res.Body, env)
 	return res, nil
 }
 
@@ -399,9 +399,10 @@ func match(path string, want, got any) []string {
 	return nil
 }
 
+// show renders a value for a failure message; fail masks and shortens it.
 func show(v any) string {
 	data, _ := json.Marshal(v)
-	return oneLine(string(data))
+	return string(data)
 }
 
 func oneLine(s string) string {

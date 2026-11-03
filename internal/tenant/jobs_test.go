@@ -72,4 +72,22 @@ func TestJobLifecycle(t *testing.T) {
 	if jobs, _ = ClaimJobs(ctx, sqlDB, 10, time.Minute); len(jobs) != 1 || jobs[0].Attempts != 2 {
 		t.Fatalf("expired lease: %+v", jobs)
 	}
+
+	// Its last lease runs out too (say the job crashes the server): it is
+	// not claimed again but failed.
+	if _, err := sqlDB.Exec(`UPDATE "_supacraft_jobs" SET "locked_until" = 0 WHERE "id" = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if jobs, _ = ClaimJobs(ctx, sqlDB, 10, time.Minute); len(jobs) != 0 {
+		t.Fatalf("an exhausted job was claimed again: %+v", jobs)
+	}
+	abandoned, err := FailAbandonedJobs(ctx, sqlDB)
+	if err != nil || len(abandoned) != 1 || abandoned[0].ID != id || abandoned[0].Status != JobFailed {
+		t.Fatalf("abandoned: %+v %v", abandoned, err)
+	}
+
+	// Delays are checked in seconds, before they could overflow.
+	if _, err := EnqueueTenantJob(ctx, t.TempDir(), "x", "f", nil, 9223372037); !errors.Is(err, ErrJobDelay) {
+		t.Fatalf("huge delay: %v", err)
+	}
 }

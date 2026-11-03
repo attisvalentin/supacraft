@@ -228,6 +228,11 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 				}
 			}
 		}
+		if rj, set := tm["run_jobs"]; set && rj != nil {
+			if _, isBool := rj.(bool); !isBool {
+				v.errorf(path+".run_jobs", "must be true or false")
+			}
+		}
 		if as, set := tm["as"]; set && as != nil {
 			if email, _ := as.(string); !emails[email] {
 				v.errorf(path+".as", "%v is not a seed user (add it to seed.users)", as)
@@ -261,8 +266,18 @@ func (v *validator) seedAndTests(raw map[string]any, authEnabled bool) {
 				v.errorf(path+".expect.jobs", "must be a list of jobs ({function, args?, status?})")
 			}
 			for i, j := range list {
-				if fn, _ := asMap(j)["function"].(string); fn != "" && !v.functions[fn] {
-					v.errorf(fmt.Sprintf("%s.expect.jobs[%d].function", path, i), "unknown function %q", fn)
+				jp := fmt.Sprintf("%s.expect.jobs[%d]", path, i)
+				jm, isMap := j.(map[string]any)
+				if !isMap {
+					v.errorf(jp, "must be an object like {\"function\": \"send_invoice\", \"status\": \"done\"}")
+					continue
+				}
+				if f, set := jm["function"]; set {
+					if fn, isStr := f.(string); !isStr {
+						v.errorf(jp+".function", "must be a function name")
+					} else if !v.functions[fn] {
+						v.errorf(jp+".function", "unknown function %q", fn)
+					}
 				}
 			}
 		}

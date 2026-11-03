@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,7 +44,7 @@ func Run(ctx context.Context, cfg *tenant.TenantConfig, db *tenant.DB, j tenant.
 	if !ok {
 		return fmt.Errorf("function %q no longer exists", j.Function)
 	}
-	if fn.Route.Method != "PRIVATE" {
+	if !strings.EqualFold(fn.Route.Method, "PRIVATE") {
 		return fmt.Errorf("function %q is not PRIVATE", j.Function)
 	}
 	loc := tenant.LoadTimezone(cfg.APISettings.Timezone)
@@ -75,6 +76,13 @@ func Run(ctx context.Context, cfg *tenant.TenantConfig, db *tenant.DB, j tenant.
 // RunDue claims the due jobs of one database and runs them in turn,
 // recording each outcome. It returns how many ran.
 func RunDue(ctx context.Context, cfg *tenant.TenantConfig, db *tenant.DB, tenantID string) (int, error) {
+	abandoned, err := tenant.FailAbandonedJobs(ctx, db.DB)
+	if err != nil {
+		return 0, err
+	}
+	for _, j := range abandoned {
+		logFailed(ctx, tenantID, j, errors.New(j.LastError))
+	}
 	claimed, err := tenant.ClaimJobs(ctx, db.DB, batch, lease)
 	if err != nil {
 		return 0, err
@@ -89,18 +97,24 @@ func RunDue(ctx context.Context, cfg *tenant.TenantConfig, db *tenant.DB, tenant
 		}
 		switch status {
 		case tenant.JobFailed:
-			msg := fmt.Sprintf("job %s (%s) failed after %d attempt(s): %v", j.ID, j.Function, j.Attempts, runErr)
-			if sb := pipeline.SandboxFrom(ctx); sb != nil && sb.Errors != nil {
-				sb.Errors(msg)
-			} else if errorlog.Global != nil {
-				errorlog.Global.Log(tenantID, "JOB", j.Function, http.StatusInternalServerError, msg)
-			}
-			slog.Warn("job failed", "tenant", tenantID, "job", j.ID, "function", j.Function, "error", runErr)
+			logFailed(ctx, tenantID, j, runErr)
 		case tenant.JobPending:
 			slog.Info("job will retry", "tenant", tenantID, "job", j.ID, "function", j.Function, "attempt", j.Attempts, "error", runErr)
 		}
 	}
 	return len(claimed), nil
+}
+
+// logFailed reports a job that ran out of attempts to the error log (the
+// test's sandbox in supacraft test).
+func logFailed(ctx context.Context, tenantID string, j tenant.Job, runErr error) {
+	msg := fmt.Sprintf("job %s (%s) failed after %d attempt(s): %v", j.ID, j.Function, j.Attempts, runErr)
+	if sb := pipeline.SandboxFrom(ctx); sb != nil && sb.Errors != nil {
+		sb.Errors(msg)
+	} else if errorlog.Global != nil {
+		errorlog.Global.Log(tenantID, "JOB", j.Function, http.StatusInternalServerError, msg)
+	}
+	slog.Warn("job failed", "tenant", tenantID, "job", j.ID, "function", j.Function, "error", runErr)
 }
 
 // Worker runs the jobs of every tenant a server serves. It scans all

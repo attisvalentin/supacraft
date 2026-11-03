@@ -556,3 +556,24 @@ func TestValidate_JobEnqueueAndFunctionNames(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_RunJobsAndExpectJobs(t *testing.T) {
+	p := load(t, `{"name": "x",
+	  "functions": {"w": {"route": {"path": "", "method": "PRIVATE"}, "steps": [{"type": "response", "data": {}}]}},
+	  "tests": {"t": {"call": "POST /fn/x", "run_jobs": "yes",
+	    "expect": {"jobs": [null, "w", {"function": 5}, {"function": "ghost"}, {"function": "w", "status": "done"}]}}}}`)
+	got := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			got[i.Path] = true
+		}
+	}
+	for _, want := range []string{"tests.t.run_jobs", "tests.t.expect.jobs[0]", "tests.t.expect.jobs[1]", "tests.t.expect.jobs[2].function", "tests.t.expect.jobs[3].function"} {
+		if !got[want] {
+			t.Errorf("missing error at %s (got %v)", want, got)
+		}
+	}
+	if got["tests.t.expect.jobs[4]"] || got["tests.t.expect.jobs[4].function"] {
+		t.Error("a valid job expectation was rejected")
+	}
+}

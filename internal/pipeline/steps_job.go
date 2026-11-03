@@ -3,13 +3,11 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/attisvalentin/supacraft/internal/tenant"
 )
-
-// MaxJobDelay is the longest a job.enqueue may wait before it runs.
-const MaxJobDelay = 30 * 24 * time.Hour
 
 // ExecuteJobEnqueue queues a PRIVATE function to run in the background with
 // args. Inside a transaction step the job is queued only if it commits.
@@ -18,7 +16,7 @@ func ExecuteJobEnqueue(ctx context.Context, step *tenant.FunctionStep, pCtx *Pip
 	if !ok {
 		return fmt.Errorf("job.enqueue: function %q not found", step.FunctionID)
 	}
-	if fn.Route.Method != "PRIVATE" {
+	if !strings.EqualFold(fn.Route.Method, "PRIVATE") {
 		return fmt.Errorf("job.enqueue: function %q must be PRIVATE", step.FunctionID)
 	}
 	args := map[string]any{}
@@ -33,10 +31,10 @@ func ExecuteJobEnqueue(ctx context.Context, step *tenant.FunctionStep, pCtx *Pip
 	if err != nil {
 		return fmt.Errorf("job.enqueue: %w", err)
 	}
-	delay := time.Duration(max(seconds, 0)) * time.Second
-	if delay > MaxJobDelay {
+	if seconds > tenant.MaxJobDelaySeconds {
 		return fmt.Errorf("job.enqueue: delay is longer than 30 days")
 	}
+	delay := time.Duration(max(seconds, 0)) * time.Second
 	id, err := tenant.EnqueueJob(ctx, deps.DBPool, deps.Config.DBName, step.FunctionID, args, delay, step.MaxAttempts)
 	if err != nil {
 		return fmt.Errorf("job.enqueue: %w", err)

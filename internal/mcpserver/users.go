@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/attisvalentin/supacraft/internal/handler"
-	"github.com/attisvalentin/supacraft/internal/pipeline"
 	"github.com/attisvalentin/supacraft/internal/project"
 	"github.com/attisvalentin/supacraft/internal/remote"
 	"github.com/attisvalentin/supacraft/internal/tenant"
@@ -42,7 +40,7 @@ func (s *server) usersTarget(onServer bool) (*usersTarget, error) {
 // cliFlag is the `supacraft users` flag selecting the same target.
 func (t *usersTarget) cliFlag() string {
 	if t.client != nil {
-		return "--server " + t.where
+		return "--server=" + t.where
 	}
 	return "--local"
 }
@@ -89,7 +87,7 @@ func (s *server) setUserRole(ctx context.Context, req *mcp.CallToolRequest, onSe
 		action:  []string{"set_user_role", t.where, id, email, role},
 		message: fmt.Sprintf("An AI agent wants to give %s the role %q in %s on %s. Approve only if you asked for this.", email, role, id, t.where),
 		title:   fmt.Sprintf("Make %s %s", email, role),
-		command: fmt.Sprintf("supacraft users set-role %s %s %s", email, role, t.cliFlag()),
+		command: shellCommand("supacraft", "users", "set-role", email, role, t.cliFlag()),
 	}); !ok {
 		return res, nil, nil
 	}
@@ -137,15 +135,7 @@ func (s *server) listJobs(ctx context.Context, onServer bool, status string, lim
 		list = out.Data
 	} else {
 		list, err = tenant.ListTenantJobs(ctx, t.p.DataDir(), id, status, limit)
-		env := t.p.Env()
-		for i := range list {
-			list[i].LastError = handler.MaskSecrets(list[i].LastError, env)
-			for k, v := range list[i].Args {
-				if str, ok := v.(string); ok {
-					list[i].Args[k] = handler.MaskSecrets(str, env)
-				}
-			}
-		}
+		handler.MaskJobs(list, t.p.Env())
 	}
 	if err != nil {
 		return nil, nil, err
@@ -165,8 +155,8 @@ func (s *server) enqueueJob(ctx context.Context, req *mcp.CallToolRequest, onSer
 		return nil, nil, err
 	}
 	id := t.p.TenantID()
-	if delay < 0 || time.Duration(delay)*time.Second > pipeline.MaxJobDelay {
-		return nil, nil, fmt.Errorf("delay must be 0-2592000 seconds")
+	if delay < 0 || delay > tenant.MaxJobDelaySeconds {
+		return nil, nil, tenant.ErrJobDelay
 	}
 	var jobID string
 	if t.client != nil {
@@ -175,7 +165,7 @@ func (s *server) enqueueJob(ctx context.Context, req *mcp.CallToolRequest, onSer
 			action:  []string{"enqueue_job", t.where, id, function, string(argsJSON), fmt.Sprint(delay)},
 			message: fmt.Sprintf("An AI agent wants to run the function %q as a background job in %s on %s (production) with args %s. Approve only if you asked for this.", function, id, t.where, argsJSON),
 			title:   fmt.Sprintf("Run %s on %s", function, t.where),
-			command: fmt.Sprintf("supacraft jobs enqueue %s --args '%s' %s", function, argsJSON, t.cliFlag()),
+			command: shellCommand("supacraft", "jobs", "enqueue", function, "--args", string(argsJSON), t.cliFlag()),
 		}); !ok {
 			return res, nil, nil
 		}
@@ -187,7 +177,7 @@ func (s *server) enqueueJob(ctx context.Context, req *mcp.CallToolRequest, onSer
 		err = t.client.Do(ctx, http.MethodPost, "/admin/tenants/"+url.PathEscape(id)+"/jobs", handler.EnqueueRequest{Function: function, Args: args, Delay: delay}, &out)
 		jobID = out.Data.ID
 	} else {
-		jobID, err = tenant.EnqueueTenantJob(ctx, t.p.DataDir(), id, function, args, time.Duration(delay)*time.Second)
+		jobID, err = tenant.EnqueueTenantJob(ctx, t.p.DataDir(), id, function, args, delay)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -208,7 +198,7 @@ func (s *server) retryJob(ctx context.Context, req *mcp.CallToolRequest, onServe
 			action:  []string{"retry_job", t.where, id, jobID},
 			message: fmt.Sprintf("An AI agent wants to run the failed job %s again in %s on %s (production). Approve only if you asked for this.", jobID, id, t.where),
 			title:   "Retry job " + jobID,
-			command: fmt.Sprintf("supacraft jobs retry %s %s", jobID, t.cliFlag()),
+			command: shellCommand("supacraft", "jobs", "retry", jobID, t.cliFlag()),
 		}); !ok {
 			return res, nil, nil
 		}

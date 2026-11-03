@@ -261,7 +261,7 @@ Give users a role and limit endpoints to some roles (needs `auth_enabled: true`)
 
 - The key is the function name (letters, digits, `_`, `-`; at most 64); `function.call` and `job.enqueue` refer to it via `function_id`
 - `method`: `GET | POST | PUT | PATCH | DELETE | PRIVATE`
-- `PRIVATE` functions are only callable via `function.call`, not via HTTP
+- `PRIVATE` functions are not served over HTTP; they run through `function.call`, as background jobs (`job.enqueue`, `supacraft jobs enqueue`, MCP `enqueue_job`) or from cron steps
 - `roles`: optional; only users with one of these roles may call the function (implies `auth_required`, see Roles)
 - `url_params`: optional, GET only. Key = param name, value = default (empty = required). Omit for unrestricted params.
 

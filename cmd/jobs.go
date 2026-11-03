@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"text/tabwriter"
-	"time"
 
 	"github.com/attisvalentin/supacraft/internal/handler"
 	"github.com/attisvalentin/supacraft/internal/tenant"
@@ -128,7 +127,7 @@ would. --args is a JSON object the function gets as args.*.
 			err = t.client.Do(cmd.Context(), http.MethodPost, "/admin/tenants/"+url.PathEscape(id)+"/jobs", handler.EnqueueRequest{Function: args[0], Args: jobArgs, Delay: jobsDelay}, &out)
 			jobID = out.Data.ID
 		} else {
-			jobID, err = tenant.EnqueueTenantJob(cmd.Context(), t.dataDir, id, args[0], jobArgs, time.Duration(jobsDelay)*time.Second)
+			jobID, err = tenant.EnqueueTenantJob(cmd.Context(), t.dataDir, id, args[0], jobArgs, jobsDelay)
 		}
 		if err != nil {
 			return tenantErr(id, err)

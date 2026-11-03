@@ -655,7 +655,7 @@ func (v *validator) steps(path string, steps []any, scope stepScope) {
 			}
 			if d, set := sm["delay"]; set && d != nil {
 				if n, isNum := d.(float64); isNum {
-					if n < 0 || n != float64(int(n)) || n > pipeline.MaxJobDelay.Seconds() {
+					if n < 0 || n != float64(int(n)) || n > tenant.MaxJobDelaySeconds {
 						v.errorf(p+".delay", "must be whole seconds between 0 and 2592000 (30 days)")
 					}
 				} else if s, isStr := d.(string); !isStr || !strings.Contains(s, "{{") {

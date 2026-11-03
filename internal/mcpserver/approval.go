@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,6 +32,23 @@ type approval struct {
 	title   string   // the checkbox label
 	command string   // what the user can run instead when there's no prompt
 }
+
+// shellCommand joins args into a command line the user can paste: each
+// argument is single-quoted unless it is plainly safe, so values the agent
+// chose can't add shell syntax.
+func shellCommand(args ...string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		if safeArg.MatchString(a) {
+			quoted[i] = a
+		} else {
+			quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		}
+	}
+	return strings.Join(quoted, " ")
+}
+
+var safeArg = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 
 func (a approval) state() string {
 	mac := hmac.New(sha256.New, approvalKey)

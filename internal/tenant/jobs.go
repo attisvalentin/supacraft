@@ -42,6 +42,12 @@ const (
 // DefaultJobAttempts is how often a job runs before it counts as failed.
 const DefaultJobAttempts = 5
 
+// MaxJobDelaySeconds is the longest a job may wait before it runs (30 days).
+const MaxJobDelaySeconds = 30 * 24 * 60 * 60
+
+// ErrJobDelay: a delay outside 0..MaxJobDelaySeconds.
+var ErrJobDelay = errors.New("delay must be 0-2592000 seconds")
+
 // Job is one queued run of a function.
 type Job struct {
 	ID          string         `json:"id"`
@@ -170,16 +176,49 @@ func RetryJob(ctx context.Context, db *sql.DB, dbName, id string) error {
 
 // ClaimJobs marks up to limit due jobs as running for lease and returns
 // them. A running job whose lease ran out (the server stopped mid-run) is
-// due again.
+// due again while it has attempts left; see FailAbandonedJobs.
 func ClaimJobs(ctx context.Context, db *sql.DB, limit int, lease time.Duration) ([]Job, error) {
 	now := time.Now()
 	rows, err := db.QueryContext(ctx, `UPDATE "_supacraft_jobs"
 		SET "status" = ?, "attempts" = "attempts" + 1, "locked_until" = ?
 		WHERE "id" IN (SELECT "id" FROM "_supacraft_jobs"
-			WHERE ("status" = ? AND "run_at" <= ?) OR ("status" = ? AND "locked_until" < ?)
+			WHERE ("status" = ? AND "run_at" <= ?)
+			   OR ("status" = ? AND "locked_until" < ? AND "attempts" < "max_attempts")
 			ORDER BY "run_at" LIMIT ?)
 		RETURNING `+jobColumns,
 		JobRunning, now.Add(lease).Unix(), JobPending, now.Unix(), JobRunning, now.Unix(), limit)
+	if noJobsTable(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// abandonedError is the error of a job whose every attempt ended with the
+// server stopping mid-run (e.g. the job crashed it).
+const abandonedError = "the server stopped while the job ran, on every attempt"
+
+// FailAbandonedJobs fails the running jobs whose lease ran out with no
+// attempts left, so a job that kills the server isn't run forever, and
+// returns them.
+func FailAbandonedJobs(ctx context.Context, db *sql.DB) ([]Job, error) {
+	now := time.Now()
+	rows, err := db.QueryContext(ctx, `UPDATE "_supacraft_jobs"
+		SET "status" = ?, "finished_at" = ?, "last_error" = ?
+		WHERE "status" = ? AND "locked_until" < ? AND "attempts" >= "max_attempts"
+		RETURNING `+jobColumns,
+		JobFailed, now.Unix(), abandonedError, JobRunning, now.Unix())
 	if noJobsTable(err) {
 		return nil, nil
 	}
@@ -271,7 +310,11 @@ func (e *JobFunctionError) Error() string {
 
 // EnqueueTenantJob queues a PRIVATE function of a tenant in dataDir to run
 // with args (operator commands: CLI, MCP, admin endpoint).
-func EnqueueTenantJob(ctx context.Context, dataDir, id, function string, args map[string]any, delay time.Duration) (string, error) {
+func EnqueueTenantJob(ctx context.Context, dataDir, id, function string, args map[string]any, delaySeconds int) (string, error) {
+	// Checked in seconds: a huge value would overflow a Duration.
+	if delaySeconds < 0 || delaySeconds > MaxJobDelaySeconds {
+		return "", ErrJobDelay
+	}
 	db, cfg, err := OpenTenantDB(ctx, dataDir, id)
 	if err != nil {
 		return "", err
@@ -281,8 +324,8 @@ func EnqueueTenantJob(ctx context.Context, dataDir, id, function string, args ma
 	switch {
 	case !ok:
 		return "", &JobFunctionError{function, "does not exist"}
-	case fn.Route.Method != "PRIVATE":
+	case !strings.EqualFold(fn.Route.Method, "PRIVATE"):
 		return "", &JobFunctionError{function, "is not PRIVATE; only PRIVATE functions run as jobs"}
 	}
-	return EnqueueJob(ctx, &DB{DB: db}, cfg.DBName, function, args, delay, 0)
+	return EnqueueJob(ctx, &DB{DB: db}, cfg.DBName, function, args, time.Duration(delaySeconds)*time.Second, 0)
 }
