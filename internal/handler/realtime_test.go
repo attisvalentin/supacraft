@@ -411,3 +411,16 @@ func TestChangesList_Admin(t *testing.T) {
 		t.Fatalf("negative since: %d", code)
 	}
 }
+
+func TestRealtime_MessageRateLimit(t *testing.T) {
+	a := newTestAPIWith(t, realtimeProject)
+	c := dialRT(t, a.serve(), "")
+	for range rtMessageBurst + 20 {
+		if err := wsjson.Write(context.Background(), c.ws, map[string]any{"type": "ping"}); err != nil {
+			break // the server already closed
+		}
+	}
+	if code := c.closeCode(); code != websocket.StatusPolicyViolation {
+		t.Fatalf("flood: close %d", code)
+	}
+}

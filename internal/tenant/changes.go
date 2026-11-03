@@ -196,14 +196,14 @@ func ChangeBounds(ctx context.Context, q Querier) (oldest, last int64, err error
 		}
 		return 0, 0, err
 	}
-	var min *int64
-	if err := q.QueryRow(ctx, `SELECT MIN("seq") FROM "_supacraft_changes"`).Scan(&min); err != nil {
+	var first *int64
+	if err := q.QueryRow(ctx, `SELECT MIN("seq") FROM "_supacraft_changes"`).Scan(&first); err != nil {
 		return 0, 0, err
 	}
-	if min == nil {
+	if first == nil {
 		return last + 1, last, nil
 	}
-	return *min, last, nil
+	return *first, last, nil
 }
 
 func noTable(err error) bool {

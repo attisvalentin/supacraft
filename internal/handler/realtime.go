@@ -17,6 +17,7 @@ import (
 	"github.com/attisvalentin/supacraft/internal/tenant"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"golang.org/x/time/rate"
 )
 
 // Realtime limits.
@@ -25,6 +26,10 @@ const (
 	rtMaxConnsPerIP     = 20
 	rtMaxConnsPerTenant = 1000
 	rtReadLimit         = 64 << 10
+	// A client may send rtMessageRate messages a second (bursts of
+	// rtMessageBurst); subscribing costs database reads.
+	rtMessageRate  = 20
+	rtMessageBurst = 40
 	// rtBuffer is how many messages may wait for a slow client before the
 	// server drops it (it resumes with since).
 	rtBuffer       = 256
@@ -260,10 +265,17 @@ func (c *rtConn) checkSession(ctx context.Context) string {
 }
 
 func (c *rtConn) readLoop(ctx context.Context) {
+	limit := rate.NewLimiter(rtMessageRate, rtMessageBurst)
 	for {
 		_, data, err := c.ws.Read(ctx)
 		if err != nil {
 			return
+		}
+		if !limit.Allow() {
+			// Keep reading until the close handshake ends the loop, so the
+			// client gets this close code.
+			c.close(websocket.StatusPolicyViolation, "too many messages")
+			continue
 		}
 		var msg rtMessage
 		if err := json.Unmarshal(data, &msg); err != nil {

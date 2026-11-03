@@ -52,6 +52,7 @@ func Build(cfg *tenant.TenantConfig, opts Options) map[string]any {
 	if cfg.RealtimeEnabled() {
 		// A WebSocket isn't an OpenAPI operation; the protocol is in the reference.
 		desc += " GET /realtime is a WebSocket that streams the changes of " + strings.Join(cfg.APISettings.Realtime.Tables, ", ") +
+			" (browsers can't send headers on a WebSocket: on a central server the tenant goes in the URL, /realtime?tenant=<id>)" +
 			" (messages: auth, subscribe {id, table, events, where, since}, unsubscribe; the server sends subscribed, change {id, seq, table, event, row} and error)."
 	}
 	out := map[string]any{

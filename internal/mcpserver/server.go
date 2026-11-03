@@ -377,7 +377,7 @@ func (s *server) register(srv *mcp.Server) {
 			return s.listJobs(ctx, in.Server, in.Status, in.Limit)
 		})
 
-	mcp.AddTool(srv, &mcp.Tool{Name: "get_changes", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Read the realtime change log: the inserted, updated and deleted rows of the api_settings.realtime tables (readable columns, oldest first, kept 15 minutes) that /realtime subscribers receive, plus last_seq. Pass since (a seq) to get only newer ones; limit 0 returns just last_seq. Local project by default, the central server with server: true."},
+	mcp.AddTool(srv, &mcp.Tool{Name: "get_changes", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, Description: "Read the realtime change log as the operator: every inserted, updated and deleted row of the api_settings.realtime tables (readable columns, oldest first, kept 15 minutes), plus last_seq. It is what /realtime streams from, without any subscriber's access rule (auth, roles, row_policy, where). Pass since (a seq) to get only newer ones; limit 0 returns just last_seq. Local project by default, the central server with server: true."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in struct {
 			Server bool   `json:"server,omitempty"`
 			Table  string `json:"table,omitempty" jsonschema:"only this table's changes"`

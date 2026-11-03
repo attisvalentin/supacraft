@@ -14,6 +14,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// tailBatch is how many changes one read takes; small enough that a page
+// of large rows stays well under the remote client's response limit.
+const tailBatch = 100
+
 var (
 	realtimeTenant string
 	realtimeLocal  bool
@@ -74,7 +78,7 @@ var realtimeTailCmd = &cobra.Command{
 		tick := time.NewTicker(time.Second)
 		defer tick.Stop()
 		for {
-			list, _, err := read(since, 500)
+			list, last, err := read(since, tailBatch)
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -82,12 +86,17 @@ var realtimeTailCmd = &cobra.Command{
 				return tenantErr(id, err)
 			}
 			for _, c := range list {
-				enc.Encode(c)
+				if err := enc.Encode(c); err != nil {
+					return err
+				}
 				since = c.Seq
 			}
-			if len(list) == 500 {
+			if len(list) == tailBatch {
 				continue
 			}
+			// Everything up to last was read; with a table filter the
+			// other tables' changes needn't be scanned again.
+			since = max(since, last)
 			select {
 			case <-ctx.Done():
 				return nil

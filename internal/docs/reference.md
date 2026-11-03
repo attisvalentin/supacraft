@@ -1083,13 +1083,14 @@ Streams the changes of the `api_settings.realtime` tables. Browsers can't send h
 | `{"type": "unsubscribe", "id": "m1"}` | `{"type": "unsubscribed", "id": "m1"}` |
 | `{"type": "ping"}` | `{"type": "pong"}` |
 
-- `row` is the row after an insert or update and the deleted row for a delete, readable columns only. The access rule is checked on every change with the current config and the user's current role.
-- Errors: `{"type": "error", "id"?, "code", "message"}` with code `bad_request`, `unauthorized`, `forbidden`, `not_found` (table not streamed or query off), `resync` (the changes after `since` are no longer kept: reload with `/query` and subscribe without `since`) or `server_error`. An error with an `id` ends that subscription.
+- `row` is the row after an insert or update and the deleted row for a delete, readable columns only. The access rule is checked on every change with the current config and the connection's role, which the server re-reads from the user at most a minute later than a role change.
+- Realtime follows each table's `query` settings, not `crud_endpoints.query`: a table listed in `realtime` streams even when the `/query` endpoint is off.
+- Errors: `{"type": "error", "id"?, "code", "message"}` with code `bad_request`, `unauthorized`, `forbidden`, `not_found` (table not streamed or its query off), `resync` (the changes after `since` are no longer kept: reload with `/query` and subscribe without `since`) or `server_error`. A refused `subscribe` (any error in reply to it) starts nothing; an error for a running subscription (its config or access changed) ends it. Refused requests never affect other subscriptions.
 - To resume after a disconnect, remember the last `seq` per subscription and subscribe again with `since`.
 - The server closes the connection with code 4001 when the token expires or the session ends (user disabled, password reset), 4004 when the tenant is removed or disabled, 4008 when the client reads too slowly (reconnect with `since`), 1001 on shutdown.
-- Limits: 20 connections per client IP and 1000 per tenant (HTTP 429 beyond), 50 subscriptions per connection, 64 KB per client message. The server pings every 25 s.
+- Limits: 20 connections per client IP and 1000 per tenant (HTTP 429 beyond), 50 subscriptions per connection, 64 KB per client message, 20 client messages a second (bursts of 40; beyond that the server closes with 1008). The server pings every 25 s.
 - A `row_policy` is evaluated on the changed row as if it were the only row of its table, so a subquery on the same table sees only that row; subqueries on other tables work as in `/query`.
-- `supacraft realtime tail [table]` prints the changes as they happen (`--since <seq>`); the MCP `get_changes` tool reads them.
+- `supacraft realtime tail [table]` prints the change log as it grows (`--since <seq>`); the MCP `get_changes` tool reads it. Both are operator views: every change with its readable columns, without any subscriber's access rule.
 
 ---
 
