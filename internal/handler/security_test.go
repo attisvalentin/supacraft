@@ -94,10 +94,10 @@ func newTestAPIServing(t *testing.T, projectJSON string, asDefault bool) *testAP
 	}
 
 	cfg := &config.Config{
-		DataDir:       p.DataDir(),
-		StoragePath:   filepath.Join(p.DataDir(), "storage"),
-		MaxFileSize:   1 << 20,
-		MaxBodySize:   1 << 16,
+		DataDir:     p.DataDir(),
+		StoragePath: filepath.Join(p.DataDir(), "storage"),
+		MaxFileSize: 1 << 20,
+		MaxBodySize: 1 << 16,
 	}
 	if asDefault {
 		cfg.DefaultTenant = p.TenantID()
