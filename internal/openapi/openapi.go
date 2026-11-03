@@ -191,13 +191,17 @@ func (d *doc) auth() {
 			"tags": []any{"auth"}, "summary": "Sign in with a provider (open in the browser)", "security": []any{},
 			"parameters": append(provider, map[string]any{"name": "redirect_to", "in": "query", "required": true,
 				"description": "One of the configured redirect URLs; it receives ?code= (or ?error=).",
-				"schema":      map[string]any{"type": "string", "enum": toAny(o.RedirectURLs)}}),
+				"schema":      map[string]any{"type": "string", "enum": toAny(o.RedirectURLs)}},
+				map[string]any{"name": "code_challenge", "in": "query", "required": true,
+					"description": "base64url(SHA-256(code_verifier)) of a random verifier the app keeps for the exchange.",
+					"schema":      map[string]any{"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}},
+				map[string]any{"name": "code_challenge_method", "in": "query", "required": true, "schema": map[string]any{"type": "string", "enum": []any{"S256"}}}),
 			"responses": map[string]any{"302": map[string]any{"description": "To the provider."}, "400": errorResponse("redirect_to is not allowed.")},
 		})
 		d.op("POST", "/auth/oauth/exchange", map[string]any{
 			"tags": []any{"auth"}, "summary": "Exchange the code from the sign-in redirect for tokens", "security": []any{},
-			"requestBody": jsonBody(object(map[string]any{"code": token}, "code")),
-			"responses":   map[string]any{"200": tokens, "400": errorResponse("Invalid, used or expired code."), "403": errorResponse("Email not verified.")},
+			"requestBody": jsonBody(object(map[string]any{"code": token, "code_verifier": token}, "code", "code_verifier")),
+			"responses":   map[string]any{"200": tokens, "400": errorResponse("Invalid, used or expired code, or a code_verifier that doesn't match."), "403": errorResponse("Email not verified.")},
 		})
 	}
 	if auth.EmailVerification.Enabled() {

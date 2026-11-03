@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/attisvalentin/supacraft/internal/oauth"
@@ -89,11 +91,19 @@ const oauthProject = `{
                        "steps": [{"type": "response", "data": {"email": "{{auth.email}}"}}]}}
 }`
 
+// appVerifier is the app's PKCE verifier in the tests; startQuery carries
+// its challenge.
+const appVerifier = "app-verifier-0123456789-0123456789-0123456789"
+
+func startQuery(extra string) string {
+	return "redirect_to=" + url.QueryEscape("https://app.example.com/done") + "&code_challenge=" + pkceChallenge(appVerifier) + "&code_challenge_method=S256" + extra
+}
+
 // signIn runs start → provider → callback and returns where the browser
 // lands at the app.
 func signIn(t *testing.T, a *testAPI, f *fakeProvider, provider string) url.Values {
 	t.Helper()
-	rec := a.raw("GET", "/auth/oauth/"+provider+"/start?redirect_to="+url.QueryEscape("https://app.example.com/done"), "")
+	rec := a.raw("GET", "/auth/oauth/"+provider+"/start?"+startQuery(""), "")
 	if rec.Code != http.StatusFound {
 		t.Fatalf("start: %d %s", rec.Code, rec.Body)
 	}
@@ -108,9 +118,13 @@ func signIn(t *testing.T, a *testAPI, f *fakeProvider, provider string) url.Valu
 	return back.Query()
 }
 
+// rawClients spreads raw requests over client addresses: a sign-in takes
+// two /auth requests, and /auth allows 20 a minute per address.
+var rawClients atomic.Int32
+
 func (a *testAPI) raw(method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.RemoteAddr = "192.0.2.1:1234"
+	req.RemoteAddr = fmt.Sprintf("198.51.100.%d:1234", rawClients.Add(1)%250+1)
 	rec := httptest.NewRecorder()
 	a.handler.ServeHTTP(rec, req)
 	return rec
@@ -121,7 +135,7 @@ func TestOAuth(t *testing.T) {
 	a := newTestAPIWith(t, strings.Replace(oauthProject, "ISSUER", f.URL, 1))
 	exchange := func(code string) map[string]any {
 		t.Helper()
-		status, out, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+code+`"}`)
+		status, out, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+code+`","code_verifier":"`+appVerifier+`"}`)
 		if status != http.StatusOK {
 			t.Fatalf("exchange: %d %s", status, raw)
 		}
@@ -136,19 +150,35 @@ func TestOAuth(t *testing.T) {
 		t.Fatalf("me: %d %s", status, raw)
 	}
 	// The code and the state work once.
-	if status, _, _ := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Get("code")+`"}`); status != http.StatusBadRequest {
+	if status, _, _ := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Get("code")+`","code_verifier":"`+appVerifier+`"}`); status != http.StatusBadRequest {
 		t.Fatalf("code reused: %d", status)
+	}
+	// Login CSRF: a code from someone else's sign-in fails without the
+	// verifier of the browser that started it.
+	f.userinfo = map[string]any{"sub": "attacker-1", "email": "mallory@example.com", "email_verified": true}
+	stolen := signIn(t, a, f, "sso").Get("code")
+	if status, _, _ := a.do("POST", "/auth/oauth/exchange", `{"code":"`+stolen+`","code_verifier":"the-victims-own-verifier-0123456789-0123456789"}`); status != http.StatusBadRequest {
+		t.Fatalf("code exchanged with another verifier: %d", status)
 	}
 	// An OAuth-only user has no password to log in with.
 	if status, _, _ := a.do("POST", "/auth/login", `{"email":"new@example.com","password":"!oauth"}`); status != http.StatusUnauthorized {
 		t.Fatalf("password login for an OAuth user: %d", status)
 	}
 
-	// A password user is linked when the provider verified the email...
+	// A password user is linked when the provider verified the email; as
+	// ann never verified hers, whoever registered it loses the password
+	// and every session (account pre-hijacking).
 	id := a.register("ann@example.com")
+	preSession := a.login("ann@example.com")
 	f.userinfo = map[string]any{"sub": "u-2", "email": "ann@example.com", "email_verified": "true"}
 	exchange(signIn(t, a, f, "sso").Get("code"))
-	// ...and the next sign-in finds the link, whatever the email says now.
+	if status, _, _ := a.do("POST", "/auth/login", `{"email":"ann@example.com","password":"Secret123!"}`); status != http.StatusUnauthorized {
+		t.Fatalf("the pre-registered password still works: %d", status)
+	}
+	if status, _, _ := a.do("GET", "/fn/me", "", "Authorization", "Bearer "+preSession["token"].(string)); status != http.StatusUnauthorized {
+		t.Fatalf("a session from before the link still works: %d", status)
+	}
+	// The next sign-in finds the link, whatever the email says now.
 	f.userinfo = map[string]any{"sub": "u-2", "email": "changed@example.com", "email_verified": false}
 	tokens = exchange(signIn(t, a, f, "sso").Get("code"))
 	if _, out, _ := a.do("GET", "/fn/me", "", "Authorization", "Bearer "+tokens["token"].(string)); out["email"] != "ann@example.com" {
@@ -183,18 +213,21 @@ func TestOAuth_Refusals(t *testing.T) {
 	f := newFakeProvider(t)
 	a := newTestAPIWith(t, strings.Replace(oauthProject, "ISSUER", f.URL, 1))
 
-	// Only listed redirect URLs, exactly.
+	// Only listed redirect URLs, exactly, and the app's PKCE is required.
 	for _, to := range []string{"https://evil.example.com/done", "https://app.example.com/done?x=1", ""} {
-		if rec := a.raw("GET", "/auth/oauth/sso/start?redirect_to="+url.QueryEscape(to), ""); rec.Code != http.StatusBadRequest {
+		if rec := a.raw("GET", "/auth/oauth/sso/start?code_challenge="+pkceChallenge(appVerifier)+"&code_challenge_method=S256&redirect_to="+url.QueryEscape(to), ""); rec.Code != http.StatusBadRequest {
 			t.Errorf("redirect_to %q: %d", to, rec.Code)
 		}
 	}
-	if rec := a.raw("GET", "/auth/oauth/nope/start?redirect_to="+url.QueryEscape("https://app.example.com/done"), ""); rec.Code != http.StatusNotFound {
+	if rec := a.raw("GET", "/auth/oauth/sso/start?redirect_to="+url.QueryEscape("https://app.example.com/done"), ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("start without code_challenge: %d", rec.Code)
+	}
+	if rec := a.raw("GET", "/auth/oauth/nope/start?"+startQuery(""), ""); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown provider: %d", rec.Code)
 	}
 
 	// A state is good once, for its own provider only.
-	rec := a.raw("GET", "/auth/oauth/sso/start?redirect_to="+url.QueryEscape("https://app.example.com/done"), "")
+	rec := a.raw("GET", "/auth/oauth/sso/start?"+startQuery(""), "")
 	query := f.approve(t, rec.Header().Get("Location"))
 	if rec := a.raw("GET", "/auth/oauth/github/callback?"+query, ""); rec.Code != http.StatusBadRequest {
 		t.Errorf("state used at another provider: %d", rec.Code)
@@ -204,7 +237,7 @@ func TestOAuth_Refusals(t *testing.T) {
 	}
 
 	// The user saying no at the provider ends at the app with an error.
-	rec = a.raw("GET", "/auth/oauth/sso/start?redirect_to="+url.QueryEscape("https://app.example.com/done"), "")
+	rec = a.raw("GET", "/auth/oauth/sso/start?"+startQuery(""), "")
 	state, _ := url.Parse(rec.Header().Get("Location"))
 	rec = a.raw("GET", "/auth/oauth/sso/callback?error=access_denied&state="+url.QueryEscape(state.Query().Get("state")), "")
 	if !strings.HasPrefix(rec.Header().Get("Location"), "https://app.example.com/done?error=access_denied") {
@@ -225,7 +258,7 @@ func TestOAuth_CentralServer(t *testing.T) {
 	a := newTestAPIServing(t, strings.Replace(oauthProject, "ISSUER", f.URL, 1), false)
 	f.userinfo = map[string]any{"sub": "c-1", "email": "c@example.com", "email_verified": true}
 
-	rec := a.raw("GET", "/auth/oauth/sso/start?tenant=demo&redirect_to="+url.QueryEscape("https://app.example.com/done"), "")
+	rec := a.raw("GET", "/auth/oauth/sso/start?"+startQuery("&tenant=demo"), "")
 	if rec.Code != http.StatusFound {
 		t.Fatalf("start: %d %s", rec.Code, rec.Body)
 	}
@@ -238,7 +271,7 @@ func TestOAuth_CentralServer(t *testing.T) {
 	if rec.Code != http.StatusFound || back.Query().Get("code") == "" {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
-	status, _, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Query().Get("code")+`"}`, "X-Tenant-ID", "demo")
+	status, _, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Query().Get("code")+`","code_verifier":"`+appVerifier+`"}`, "X-Tenant-ID", "demo")
 	if status != http.StatusOK {
 		t.Fatalf("exchange: %d %s", status, raw)
 	}

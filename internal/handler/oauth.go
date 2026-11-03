@@ -3,13 +3,17 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,8 +32,7 @@ const (
 	oauthStateTTL = 10 * time.Minute
 	// A login code only travels from the callback redirect to the app's
 	// exchange call.
-	oauthCodeTTL     = time.Minute
-	purposeOAuthCode = "oauth_login"
+	oauthCodeTTL = time.Minute
 	// noPassword can't match any bcrypt hash: OAuth-only users have no
 	// password until they reset one.
 	noPassword = "!oauth"
@@ -63,8 +66,17 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// pkceChallenge is the S256 challenge of verifier (RFC 7636).
+func pkceChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+var challengeRe = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
 // HandleOAuthStart: GET /auth/oauth/{provider}/start?redirect_to=<app url>
-// (&tenant=<id> on a central server) sends the browser to the provider.
+// &code_challenge=<S256 of an app-held verifier> (&tenant=<id> on a central
+// server) sends the browser to the provider.
 func HandleOAuthStart(pool *tenant.PoolManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg, name, p, ok := oauthSetup(w, r)
@@ -74,6 +86,14 @@ func HandleOAuthStart(pool *tenant.PoolManager) http.HandlerFunc {
 		redirectTo := r.URL.Query().Get("redirect_to")
 		if !cfg.APISettings.Auth.OAuth.RedirectAllowed(redirectTo) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "redirect_to is not one of api_settings.auth.oauth.redirect_urls"})
+			return
+		}
+		// The app's own PKCE: only the browser that started can use the
+		// resulting code, so a code from someone else's sign-in (login
+		// CSRF) is worthless.
+		appChallenge := r.URL.Query().Get("code_challenge")
+		if !challengeRe.MatchString(appChallenge) || r.URL.Query().Get("code_challenge_method") != "S256" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code_challenge (S256 of a random code_verifier the app keeps) and code_challenge_method=S256 are required"})
 			return
 		}
 		provider, err := oauthProvider(r.Context(), cfg, name, p)
@@ -96,8 +116,8 @@ func HandleOAuthStart(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		if _, err := dbPool.Exec(r.Context(),
-			`INSERT INTO "_supacraft_oauth_states" ("state_hash", "provider", "verifier", "redirect_to", "expires_at") VALUES (?, ?, ?, ?, ?)`,
-			hashToken(state), name, verifier, redirectTo, now.Add(oauthStateTTL).Unix()); err != nil {
+			`INSERT INTO "_supacraft_oauth_states" ("state_hash", "provider", "verifier", "app_challenge", "redirect_to", "expires_at") VALUES (?, ?, ?, ?, ?, ?)`,
+			hashToken(state), name, verifier, appChallenge, redirectTo, now.Add(oauthStateTTL).Unix()); err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("oauth state: %v", err))
 			return
 		}
@@ -121,10 +141,10 @@ func HandleOAuthCallback(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		q := r.URL.Query()
-		var provider, verifier, redirectTo string
+		var provider, verifier, appChallenge, redirectTo string
 		err = dbPool.QueryRow(r.Context(),
-			`DELETE FROM "_supacraft_oauth_states" WHERE "state_hash" = ? AND "expires_at" > ? RETURNING "provider", "verifier", "redirect_to"`,
-			hashToken(q.Get("state")), time.Now().Unix()).Scan(&provider, &verifier, &redirectTo)
+			`DELETE FROM "_supacraft_oauth_states" WHERE "state_hash" = ? AND "expires_at" > ? RETURNING "provider", "verifier", "app_challenge", "redirect_to"`,
+			hashToken(q.Get("state")), time.Now().Unix()).Scan(&provider, &verifier, &appChallenge, &redirectTo)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && provider != name) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or expired sign-in; start again"})
 			return
@@ -165,9 +185,13 @@ func HandleOAuthCallback(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		code := randomHex(32)
-		if _, err := dbPool.Exec(r.Context(),
-			`INSERT INTO "_supacraft_auth_tokens" ("token_hash", "user_id", "purpose", "expires_at", "created_at") VALUES (?, ?, ?, ?, ?)`,
-			hashToken(code), userID, purposeOAuthCode, time.Now().Add(oauthCodeTTL).Unix(), time.Now().Unix()); err != nil {
+		now := time.Now()
+		if _, err := dbPool.Exec(r.Context(), `DELETE FROM "_supacraft_oauth_codes" WHERE "expires_at" < ?`, now.Unix()); err == nil {
+			_, err = dbPool.Exec(r.Context(),
+				`INSERT INTO "_supacraft_oauth_codes" ("code_hash", "user_id", "app_challenge", "expires_at") VALUES (?, ?, ?, ?)`,
+				hashToken(code), userID, appChallenge, now.Add(oauthCodeTTL).Unix())
+		}
+		if err != nil {
 			logError(r, http.StatusInternalServerError, fmt.Sprintf("oauth code: %v", err))
 			back("error", "server_error")
 			return
@@ -196,11 +220,17 @@ func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, pro
 	if !id.EmailVerified {
 		return "", "email_not_verified", nil
 	}
-	err = db.QueryRow(ctx, `SELECT "id" FROM "users" WHERE "email" = ?`, id.Email).Scan(&userID)
+	var localVerified bool
+	err = db.QueryRow(ctx, `SELECT "id", COALESCE("email_verified", 0) FROM "users" WHERE "email" = ?`, id.Email).Scan(&userID, &localVerified)
 	switch {
 	case err == nil:
 		if reason := activeReason(ctx, db, userID); reason != "" {
 			return "", reason, nil
+		}
+		if !localVerified {
+			if err := claimUnverified(ctx, db, cfg, userID); err != nil {
+				return "", "", err
+			}
 		}
 	case errors.Is(err, sql.ErrNoRows):
 		if userID, err = createOAuthUser(ctx, db, cfg, id); err != nil {
@@ -212,6 +242,17 @@ func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, pro
 	_, err = db.Exec(ctx, `INSERT INTO "_supacraft_identities" ("provider", "subject", "user_id", "email", "created_at") VALUES (?, ?, ?, ?, ?)`,
 		provider, id.Subject, userID, id.Email, time.Now().Unix())
 	return userID, "", err
+}
+
+// claimUnverified hands a local account whose email was never verified to
+// the provider account that just proved owning the email: anyone else who
+// registered it (account pre-hijacking) loses the password and every
+// session; the owner can reset a password later.
+func claimUnverified(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, userID string) error {
+	_, err := tenant.WriteWithWebhooks(ctx, db, cfg, "users", tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
+		return queryRows(ctx, q, cfg, `UPDATE "users" SET "password" = ?, "email_verified" = 1, "session_version" = COALESCE("session_version", 0) + 1, "updated_at" = datetime('now') WHERE "id" = ? RETURNING *`, noPassword, userID)
+	})
+	return err
 }
 
 func activeReason(ctx context.Context, db *tenant.DB, userID string) string {
@@ -241,8 +282,9 @@ func createOAuthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfi
 	return row["id"].(string), nil
 }
 
-// HandleOAuthExchange: POST /auth/oauth/exchange {"code"} turns the login
-// code from the callback redirect into the tokens /auth/login returns.
+// HandleOAuthExchange: POST /auth/oauth/exchange {"code", "code_verifier"}
+// turns the login code from the callback redirect into the tokens
+// /auth/login returns; code_verifier must match the start's challenge.
 func HandleOAuthExchange(pool *tenant.PoolManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg := middleware.TenantFromContext(r.Context())
@@ -251,10 +293,11 @@ func HandleOAuthExchange(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 		var body struct {
-			Code string `json:"code"`
+			Code         string `json:"code"`
+			CodeVerifier string `json:"code_verifier"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Code == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body must be {\"code\": ...}"})
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Code == "" || body.CodeVerifier == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body must be {\"code\", \"code_verifier\"}"})
 			return
 		}
 		dbPool, err := pool.GetPool(r.Context(), cfg)
@@ -262,8 +305,11 @@ func HandleOAuthExchange(pool *tenant.PoolManager) http.HandlerFunc {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("database connection failed: %v", err))
 			return
 		}
-		userID, err := consumeToken(r.Context(), dbPool, body.Code, purposeOAuthCode)
-		if errors.Is(err, errBadToken) {
+		var userID, appChallenge string
+		err = dbPool.QueryRow(r.Context(),
+			`DELETE FROM "_supacraft_oauth_codes" WHERE "code_hash" = ? AND "expires_at" > ? RETURNING "user_id", "app_challenge"`,
+			hashToken(body.Code), time.Now().Unix()).Scan(&userID, &appChallenge)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && subtle.ConstantTimeCompare([]byte(pkceChallenge(body.CodeVerifier)), []byte(appChallenge)) != 1) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or expired code"})
 			return
 		}
