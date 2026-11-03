@@ -64,9 +64,13 @@ Register it with your agent, e.g. in .mcp.json (supacraft init does this):
 				return nil, err
 			}
 			srv, _, err := app.Start(ctx, cfg, true)
-			if err != nil {
+			if errors.Is(err, syscall.EADDRINUSE) {
+				// e.g. supacraft dev already serves it: the tools use that.
 				fmt.Fprintf(os.Stderr, "supacraft: not serving the API (%v); using %s\n", err, opts.APIURL)
 				return nil, nil
+			}
+			if err != nil {
+				return nil, err
 			}
 			fmt.Fprintf(os.Stderr, "supacraft: API for %q on %s\n", p.Name(), opts.APIURL)
 			return srv.Reload, nil
@@ -77,7 +81,8 @@ Register it with your agent, e.g. in .mcp.json (supacraft init does this):
 			// The API lives as long as this process, not the tool call.
 			opts.Started = func(context.Context) (func(context.Context), error) { return start(ctx) }
 		} else if opts.Reload, err = start(ctx); err != nil {
-			return err
+			// The tools still work on the project; only calls to the API fail.
+			fmt.Fprintf(os.Stderr, "supacraft: not serving the API (%v)\n", err)
 		}
 		return mcpserver.Run(ctx, opts)
 	},
