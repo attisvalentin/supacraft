@@ -964,7 +964,7 @@ All four answer `404` when their flow isn't configured. A new verification link 
   }
 }
 ```
-- `google` and `github` are built in; any other name is an OpenID Connect provider found from its `issuer` (Microsoft Entra, GitLab, Auth0, Keycloak, Okta, …). `scopes` overrides the defaults (`openid email profile`; GitHub `read:user user:email`).
+- `google` and `github` are built in; any other name is an OpenID Connect provider found from its `issuer` (Microsoft Entra, GitLab, Auth0, Keycloak, Okta, …), written exactly as the provider's discovery document states it (trailing slash included or not). Linked accounts are stored per issuer, so renaming a provider keeps them, and pointing a name at another issuer starts fresh. `scopes` overrides the defaults (`openid email profile`; GitHub `read:user user:email`).
 - `public_url` is the API's public base URL. Register `<public_url>/auth/oauth/<provider>/callback` as the redirect/callback URL in each provider's console. `redirect_urls` are the app pages a sign-in may return to (matched exactly).
 
 | Step | Who | What |

@@ -39,10 +39,14 @@ type Identity struct {
 
 // Provider is a configured provider ready for one sign-in.
 type Provider struct {
-	config   oauth2.Config
-	client   *http.Client
-	identity func(ctx context.Context, p *Provider, tok *oauth2.Token) (Identity, error)
-	userinfo string
+	// Namespace scopes the provider's account ids: "github", or the OIDC
+	// issuer. Identities are stored under it, so renaming a provider
+	// keeps them and pointing a name at another issuer can't reuse them.
+	Namespace string
+	config    oauth2.Config
+	client    *http.Client
+	identity  func(ctx context.Context, p *Provider, tok *oauth2.Token) (Identity, error)
+	userinfo  string
 }
 
 // New prepares the provider name of cfg; callback is its redirect URI.
@@ -57,6 +61,7 @@ func New(ctx context.Context, client *http.Client, name string, cfg tenant.OAuth
 			p.config.Scopes = []string{"read:user", "user:email"}
 		}
 		p.identity = githubIdentity
+		p.Namespace = "github"
 		return p, nil
 	}
 	issuer := cfg.Issuer
@@ -76,6 +81,7 @@ func New(ctx context.Context, client *http.Client, name string, cfg tenant.OAuth
 	}
 	p.userinfo = d.UserinfoEndpoint
 	p.identity = oidcIdentity
+	p.Namespace = issuer
 	return p, nil
 }
 
@@ -177,14 +183,15 @@ type cachedDiscovery struct {
 
 // discover reads an issuer's OpenID configuration (cached for an hour).
 func discover(ctx context.Context, client *http.Client, issuer string) (discovery, error) {
-	issuer = strings.TrimRight(issuer, "/")
+	// The issuer is kept exactly as configured, for the cache and the
+	// match below; only the well-known URL drops a trailing slash.
 	discoveryMu.Lock()
 	c, ok := discoveryCache[issuer]
 	discoveryMu.Unlock()
 	if ok && time.Since(c.fetched) < time.Hour {
 		return c.d, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, issuer+"/.well-known/openid-configuration", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(issuer, "/")+"/.well-known/openid-configuration", nil)
 	if err != nil {
 		return discovery{}, err
 	}
@@ -200,8 +207,9 @@ func discover(ctx context.Context, client *http.Client, issuer string) (discover
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(&d); err != nil {
 		return discovery{}, fmt.Errorf("discovery: %w", err)
 	}
-	// The document must be the issuer's own (OpenID Connect Discovery §4.3).
-	if strings.TrimRight(d.Issuer, "/") != issuer || d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" || d.UserinfoEndpoint == "" {
+	// The document must be the issuer's own, exactly (OpenID Connect
+	// Discovery §4.3).
+	if d.Issuer != issuer || d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" || d.UserinfoEndpoint == "" {
 		return discovery{}, fmt.Errorf("discovery: %s is not a complete OpenID configuration for this issuer", issuer)
 	}
 	discoveryMu.Lock()

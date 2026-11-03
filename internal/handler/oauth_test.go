@@ -289,3 +289,62 @@ func TestOAuth_CentralServer(t *testing.T) {
 		t.Fatalf("exchange: %d %s", status, raw)
 	}
 }
+
+// Identities are scoped to the issuer: a provider name pointing at the
+// same issuer shares them, another issuer's equal account id doesn't, and
+// a deleted user's provider account can sign up again.
+func TestOAuth_IdentityNamespaces(t *testing.T) {
+	f1, f2 := newFakeProvider(t), newFakeProvider(t)
+	cfg := `{
+  "name": "demo",
+  "auth_enabled": true,
+  "api_settings": {
+    "tables": {"users": {"delete": {"enabled": true}}},
+    "auth": {"oauth": {
+      "public_url": "https://api.example.com",
+      "redirect_urls": ["https://app.example.com/done"],
+      "providers": {
+        "sso": {"issuer": "` + f1.URL + `", "client_id": "a", "client_secret": "b"},
+        "alias": {"issuer": "` + f1.URL + `", "client_id": "a", "client_secret": "b"},
+        "other": {"issuer": "` + f2.URL + `", "client_id": "a", "client_secret": "b"},
+        "slash": {"issuer": "` + f1.URL + `/", "client_id": "a", "client_secret": "b"}}}}},
+  "functions": {"me": {"route": {"path": "/fn/me", "method": "GET", "auth_required": true},
+                       "steps": [{"type": "response", "data": {"id": "{{auth.user_id}}"}}]}}
+}`
+	a := newTestAPIWith(t, cfg)
+	userOf := func(f *fakeProvider, provider string) string {
+		t.Helper()
+		back := signIn(t, a, f, provider)
+		status, out, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Get("code")+`","code_verifier":"`+back.Get("verifier")+`"}`)
+		if status != http.StatusOK {
+			t.Fatalf("%s: %d %s %v", provider, status, raw, back)
+		}
+		_, me, _ := a.do("GET", "/fn/me", "", "Authorization", "Bearer "+out["data"].(map[string]any)["token"].(string))
+		return me["id"].(string)
+	}
+
+	f1.userinfo = map[string]any{"sub": "same", "email": "one@example.com", "email_verified": true}
+	first := userOf(f1, "sso")
+	if userOf(f1, "alias") != first {
+		t.Fatal("the same issuer under another name made a new user")
+	}
+	f2.userinfo = map[string]any{"sub": "same", "email": "two@example.com", "email_verified": true}
+	if userOf(f2, "other") == first {
+		t.Fatal("another issuer's account id signed in as an existing user")
+	}
+
+	// The issuer must match exactly: f1 calls itself without the slash.
+	rec := a.raw("GET", "/auth/oauth/slash/start?"+startQuery(""), "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("issuer with a trailing slash: %d", rec.Code)
+	}
+
+	// A deleted user's provider account signs up again instead of being
+	// stuck on a link to nobody.
+	if status, _, raw := a.do("POST", "/delete", `{"table_id":"users","where":{"id":"`+first+`"}}`); status != http.StatusOK {
+		t.Fatalf("delete: %d %s", status, raw)
+	}
+	if again := userOf(f1, "sso"); again == first {
+		t.Fatal("a deleted user signed in")
+	}
+}

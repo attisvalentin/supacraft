@@ -36,7 +36,8 @@ var AuthTokensDDL = []string{
 		"app_challenge" TEXT NOT NULL,
 		"expires_at"    INTEGER NOT NULL
 	)`,
-	// Which provider account belongs to which user.
+	// Which provider account belongs to which user. "provider" is the
+	// account namespace: "github" or the OIDC issuer URL.
 	`CREATE TABLE IF NOT EXISTS "_supacraft_identities" (
 		"provider"   TEXT NOT NULL,
 		"subject"    TEXT NOT NULL,

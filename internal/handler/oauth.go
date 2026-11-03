@@ -174,7 +174,7 @@ func HandleOAuthCallback(pool *tenant.PoolManager) http.HandlerFunc {
 			back("error", "provider_error")
 			return
 		}
-		userID, reason, err := oauthUser(r.Context(), dbPool, cfg, name, id)
+		userID, reason, err := oauthUser(r.Context(), dbPool, cfg, prov.Namespace, id)
 		if err != nil {
 			logError(r, http.StatusInternalServerError, fmt.Sprintf("oauth %s: %v", name, err))
 			back("error", "server_error")
@@ -204,12 +204,21 @@ func HandleOAuthCallback(pool *tenant.PoolManager) http.HandlerFunc {
 // oauthUser finds the user of a provider account, or — when the provider
 // verified its email — links it to the user with that email or creates
 // one. reason is a sign-in refusal to show the app (error=<reason>).
-func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, provider string, id oauth.Identity) (userID, reason string, err error) {
-	err = db.QueryRow(ctx, `SELECT "user_id" FROM "_supacraft_identities" WHERE "provider" = ? AND "subject" = ?`, provider, id.Subject).Scan(&userID)
+func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, namespace string, id oauth.Identity) (userID, reason string, err error) {
+	err = db.QueryRow(ctx, `SELECT "user_id" FROM "_supacraft_identities" WHERE "provider" = ? AND "subject" = ?`, namespace, id.Subject).Scan(&userID)
 	if err == nil {
-		return userID, activeReason(ctx, db, userID), nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+		var exists int
+		if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM "users" WHERE "id" = ?`, userID).Scan(&exists); err != nil {
+			return "", "", err
+		}
+		if exists > 0 {
+			return userID, activeReason(ctx, db, userID), nil
+		}
+		// The user was deleted: forget the link and sign in afresh.
+		if _, err := db.Exec(ctx, `DELETE FROM "_supacraft_identities" WHERE "provider" = ? AND "subject" = ?`, namespace, id.Subject); err != nil {
+			return "", "", err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err
 	}
 	if id.Email == "" {
@@ -241,7 +250,7 @@ func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, pro
 		return "", "", err
 	}
 	_, err = db.Exec(ctx, `INSERT INTO "_supacraft_identities" ("provider", "subject", "user_id", "email", "created_at") VALUES (?, ?, ?, ?, ?)`,
-		provider, id.Subject, userID, id.Email, time.Now().Unix())
+		namespace, id.Subject, userID, id.Email, time.Now().Unix())
 	return userID, "", err
 }
 
