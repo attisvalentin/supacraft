@@ -19,16 +19,18 @@ func Init(dir, name string, auth bool) error {
 	if _, err := os.Stat(filepath.Join(dir, FileName)); err == nil {
 		return fmt.Errorf("%s already exists in %s", FileName, dir)
 	}
-	if err := New(dir, name, auth).Save(); err != nil {
-		return err
-	}
+	// supacraft.json marks a project, so it is written last: a failure
+	// before it leaves the directory ready for another try.
 	if err := writeIfMissing(filepath.Join(dir, ".env"), "# Secrets referenced from supacraft.json as \"${NAME}\".\n"); err != nil {
 		return err
 	}
 	if err := appendLines(filepath.Join(dir, ".gitignore"), StateDir+"/", ".env"); err != nil {
 		return err
 	}
-	return addMCPConfig(filepath.Join(dir, ".mcp.json"))
+	if err := addMCPConfig(filepath.Join(dir, ".mcp.json")); err != nil {
+		return err
+	}
+	return New(dir, name, auth).Save()
 }
 
 func writeIfMissing(path, content string) error {

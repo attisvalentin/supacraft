@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,5 +119,36 @@ func TestInitProject(t *testing.T) {
 	}
 	if out, isErr := callTool(t, Options{Dir: dir}, nil, "init_project", map[string]any{"name": "Again"}); !isErr || !strings.Contains(out, "already exists") {
 		t.Errorf("second init: %s", out)
+	}
+}
+
+// A failed API start can be retried; a failed init leaves no half project.
+func TestInitProject_Retry(t *testing.T) {
+	dir := t.TempDir()
+	calls := 0
+	opts := Options{Dir: dir, Started: func(context.Context) (func(context.Context), error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("port busy")
+		}
+		return nil, nil
+	}}
+	s := &server{opts: opts}
+	if _, _, err := s.initProject(context.Background(), "Shop", true); err == nil {
+		t.Fatal("first start should fail")
+	}
+	if _, _, err := s.initProject(context.Background(), "Shop", true); err != nil || calls != 2 {
+		t.Fatalf("retry: %v (%d starts)", err, calls)
+	}
+
+	bad := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bad, ".mcp.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := project.Init(bad, "x", true); err == nil {
+		t.Fatal("init with a broken .mcp.json succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(bad, project.FileName)); !os.IsNotExist(err) {
+		t.Fatal("a failed init left supacraft.json behind")
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 
 	"github.com/attisvalentin/supacraft/internal/handler"
 	"github.com/attisvalentin/supacraft/internal/project"
@@ -54,7 +56,7 @@ func (s *server) deploy(ctx context.Context, req *mcp.CallToolRequest, dryRun, r
 		}
 		if res, ok := approved(req, approval{
 			action:  []string{"deploy", srv, p.TenantID(), hex.EncodeToString(sum[:]), fmt.Sprint(replace), fmt.Sprint(allowMissing)},
-			message: fmt.Sprintf("An AI agent wants to deploy %s (the current supacraft.json) to %s (production). Run a dry run first if you haven't seen what changes. Approve only if you asked for this.", p.TenantID(), srv),
+			message: fmt.Sprintf("An AI agent wants to deploy %s (the current supacraft.json) to %s (production).%s Run a dry run first if you haven't seen what changes. Approve only if you asked for this.", p.TenantID(), srv, deployRisks(replace, allowMissing)),
 			title:   fmt.Sprintf("Deploy %s to %s", p.TenantID(), srv),
 			command: shellCommand(append([]string{"supacraft"}, append(flags, "--server="+srv)...)...),
 		}); !ok {
@@ -81,6 +83,18 @@ func (s *server) deploy(ctx context.Context, req *mcp.CallToolRequest, dryRun, r
 		return nil, nil, err
 	}
 	return jsonResult(map[string]any{"server": srv, "result": out}), nil, nil
+}
+
+// deployRisks spells out the deploy options the user is approving.
+func deployRisks(replace, allowMissing bool) string {
+	var s string
+	if replace {
+		s += " It REPLACES a tenant with the same id even if another project owns it."
+	}
+	if allowMissing {
+		s += " It deploys even if secrets are missing (they resolve to \"\")."
+	}
+	return s
 }
 
 // tenantAction disables, enables or removes a tenant on the central server
@@ -203,18 +217,24 @@ func (s *server) serviceAction(ctx context.Context, req *mcp.CallToolRequest, ac
 	case "status":
 		err = service.Status(opts)
 	case "install", "uninstall":
-		workDir, flag := dataDir, "--data-dir"
+		workDir, flag := "", "--data-dir"
 		cmd := []string{"supacraft", "service", action}
+		serving := ""
 		if action == "install" {
 			if dataDir == "" {
 				workDir, flag = s.opts.Dir, "--dir"
 			} else {
-				cmd = append(cmd, "--data-dir="+dataDir)
+				// systemd needs an absolute WorkingDirectory.
+				if workDir, err = filepath.Abs(dataDir); err != nil {
+					return nil, nil, err
+				}
+				cmd = append(cmd, "--data-dir="+workDir)
 			}
+			serving = fmt.Sprintf(", serving %s %s", flag, workDir)
 		}
 		if res, ok := approved(req, approval{
 			action:  []string{"service", action, workDir, flag},
-			message: fmt.Sprintf("An AI agent wants to %s the SupaCraft systemd service on this machine (needs sudo). Approve only if you asked for this.", action),
+			message: fmt.Sprintf("An AI agent wants to %s the SupaCraft systemd service on this machine%s (needs sudo). Approve only if you asked for this.", action, serving),
 			title:   fmt.Sprintf("%s the systemd service", action),
 			command: shellCommand(cmd...),
 		}); !ok {
@@ -243,9 +263,16 @@ func (s *server) initProject(ctx context.Context, name string, auth bool) (*mcp.
 	if name == "" {
 		return nil, nil, errors.New("name is required")
 	}
-	if err := project.Init(s.opts.Dir, name, auth); err != nil {
-		return nil, nil, err
+	_, statErr := os.Stat(filepath.Join(s.opts.Dir, project.FileName))
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		if err := project.Init(s.opts.Dir, name, auth); err != nil {
+			return nil, nil, err
+		}
+	case s.opts.Started == nil:
+		return nil, nil, fmt.Errorf("%s already exists in %s", project.FileName, s.opts.Dir)
 	}
+	// Created now, or earlier with an API start that failed: start it.
 	if s.opts.Started != nil {
 		reload, err := s.opts.Started(ctx)
 		if err != nil {
