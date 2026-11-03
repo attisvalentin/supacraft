@@ -59,7 +59,8 @@ cannot answer; only call them when the user asked for that change. The one thing
 values: the user sets them with "supacraft secrets set NAME".
 
 Background work: a job.enqueue step runs a PRIVATE function later with retries; get_jobs shows the queue,
-enqueue_job and retry_job act on it.
+enqueue_job and retry_job act on it. api_settings.webhooks POST table changes to other systems through the same
+queue (signed, retried); test them with expect.webhooks and run_jobs + http_mocks.
 
 Roles: api_settings.auth.roles defines them; "roles" on a table method, file endpoint or function route limits
 access. list_users shows who has which role. Change a role only when the user asks: set_user_role makes the user

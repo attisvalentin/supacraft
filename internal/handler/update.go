@@ -87,35 +87,14 @@ func HandleUpdate(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
+		// RETURNING reads the rows as changed, even when the change moves
+		// them out of the WHERE (status: pending → shipped).
 		updateSQL, args := query.BuildUpdate(table.Name, req.Data, whereSql, whereArgs)
-		res, err := dbPool.Exec(r.Context(), updateSQL, args...)
+		results, err := tenant.WriteWithWebhooks(r.Context(), dbPool, cfg, table.Name, tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
+			return queryRows(r.Context(), q, cfg, updateSQL+" RETURNING *", args...)
+		})
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("update failed: %v", err))
-			return
-		}
-		affected, _ := res.RowsAffected()
-		if affected == 0 {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no matching record found"})
-			return
-		}
-
-		// Re-SELECT updated rows using the same WHERE clause.
-		colNames := make([]string, len(table.Columns))
-		for i, c := range table.Columns {
-			colNames[i] = c.Name
-		}
-		selectSQL, selectArgs := query.BuildSelect(table.Name, colNames, whereSql, whereArgs, "", "", nil)
-		rows, err := dbPool.Query(r.Context(), selectSQL, selectArgs...)
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("select updated: %v", err))
-			return
-		}
-		defer rows.Close()
-
-		loc := tenant.LoadTimezone(cfg.APISettings.Timezone)
-		results, err := query.ScanAllRowsToMaps(rows, loc)
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("scan updated: %v", err))
 			return
 		}
 		if len(results) == 0 {

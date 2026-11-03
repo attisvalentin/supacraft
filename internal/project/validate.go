@@ -277,6 +277,7 @@ func (v *validator) apiSettings(s map[string]any) {
 	if n, ok := asMap(s["auth"])["password_min_length"].(float64); ok && n > tenant.MaxPasswordBytes {
 		v.errorf("api_settings.auth.password_min_length", "must be at most %d (bcrypt uses only the first %d bytes)", tenant.MaxPasswordBytes, tenant.MaxPasswordBytes)
 	}
+	v.webhooks(asMap(s["webhooks"]))
 	if val, ok := s["openapi"]; ok && val != nil {
 		if _, isBool := val.(bool); !isBool {
 			v.errorf("api_settings.openapi", "must be true or false")
@@ -330,6 +331,63 @@ func (v *validator) authEmails(auth, smtp map[string]any, authEnabled bool) {
 		}
 		if key == "password_reset" && flow["required"] != nil {
 			v.errorf(path+".required", "only applies to email_verification")
+		}
+	}
+}
+
+var webhookOps = setOf("insert", "update", "delete", "*")
+
+// webhooks checks api_settings.webhooks.
+func (v *validator) webhooks(hooks map[string]any) {
+	for name, h := range hooks {
+		path := "api_settings.webhooks." + name
+		if !functionNameRe.MatchString(name) {
+			v.errorf(path, "invalid webhook name %q (letters, digits, _ and -, at most 64)", name)
+		}
+		hm, ok := h.(map[string]any)
+		if !ok {
+			v.errorf(path, "must be an object {url, events, secret?}")
+			continue
+		}
+		link, _ := hm["url"].(string)
+		if !envref.Ref.MatchString(link) {
+			u, err := url.Parse(link)
+			switch {
+			case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+				v.errorf(path+".url", "must be an http(s) URL or a \"${NAME}\" reference")
+			case u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1":
+				v.warnf(path+".url", "plain http sends the changed rows unencrypted; use https")
+			}
+		}
+		events := asSlice(hm["events"])
+		if len(events) == 0 {
+			v.errorf(path+".events", "must list at least one event, e.g. \"orders.insert\" or \"orders.*\"")
+		}
+		for i, e := range events {
+			s, _ := e.(string)
+			table, op, found := strings.Cut(s, ".")
+			ep := fmt.Sprintf("%s.events[%d]", path, i)
+			switch {
+			case !found || !webhookOps[op]:
+				v.errorf(ep, "%v must be <table>.insert, .update, .delete or .*", e)
+			case v.tables[table] == nil:
+				v.errorf(ep, "unknown table %q", table)
+			}
+		}
+		switch secret := hm["secret"].(type) {
+		case nil:
+			v.warnf(path+".secret", "deliveries are not signed; set \"secret\": \"${NAME}\" so the receiver can verify them")
+		case string:
+			if !envref.Ref.MatchString(secret) {
+				v.warnf(path+".secret", "a secret stored in plain text; use \"${NAME}\" and put the value in .env")
+			}
+		default:
+			v.errorf(path+".secret", "must be a string")
+		}
+		if m, set := hm["max_attempts"]; set {
+			if n, isNum := m.(float64); !isNum || n < 1 || n > 20 || n != float64(int(n)) {
+				v.errorf(path+".max_attempts", "must be between 1 and 20")
+			}
 		}
 	}
 }

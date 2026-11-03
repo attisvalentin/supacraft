@@ -37,9 +37,12 @@ func backoff(attempt int) time.Duration {
 	return min(d, time.Hour)
 }
 
-// Run executes one job: its PRIVATE function with args.* set to the job's
+// Run executes one job: a webhook delivery, or its PRIVATE function with args.* set to the job's
 // args and job.id / job.attempt. A fail step or any error fails the run.
 func Run(ctx context.Context, cfg *tenant.TenantConfig, db *tenant.DB, j tenant.Job) error {
+	if name, ok := tenant.WebhookName(j.Function); ok {
+		return deliver(ctx, cfg, name, j)
+	}
 	fn, ok := cfg.Functions[j.Function]
 	if !ok {
 		return fmt.Errorf("function %q no longer exists", j.Function)

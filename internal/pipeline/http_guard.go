@@ -83,6 +83,20 @@ var (
 	strictHTTPClient = guardedClient(internalAddress, false)
 )
 
+// ClientFor is the client for a request to rawURL as written in config:
+// the test sandbox's mocks under supacraft test, otherwise one that never
+// reaches link-local addresses (nor internal ones when the host comes
+// from a template).
+func ClientFor(ctx context.Context, rawURL string) *http.Client {
+	if sb := SandboxFrom(ctx); sb != nil {
+		return &http.Client{Transport: sb.HTTP, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	if templatedHost(rawURL) {
+		return strictHTTPClient
+	}
+	return httpClient
+}
+
 // templatedHost reports whether the scheme or host of a configured URL
 // contains a {{...}} reference.
 func templatedHost(rawURL string) bool {

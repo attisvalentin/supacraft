@@ -577,3 +577,40 @@ func TestValidate_RunJobsAndExpectJobs(t *testing.T) {
 		t.Error("a valid job expectation was rejected")
 	}
 }
+
+func TestValidate_Webhooks(t *testing.T) {
+	p := load(t, `{"name": "x",
+	  "schema": {"tables": [{"name": "orders", "columns": [{"name": "id", "type": "uuid", "primary": true}]}]},
+	  "api_settings": {"webhooks": {
+	    "ok": {"url": "${ERP_URL}", "events": ["orders.insert", "orders.*"], "secret": "${ERP_SECRET}"},
+	    "bad name!": {"url": "https://x.co", "events": ["orders.insert"], "secret": "${S}"},
+	    "broken": {"url": "ftp://x.co", "events": ["orders.upsert", "ghost.insert", "orders"], "max_attempts": 0},
+	    "none": {"url": "http://example.com/hook", "events": [], "secret": "plain-text"}}}}`)
+	errs, warns := map[string]bool{}, map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			errs[i.Path] = true
+		} else {
+			warns[i.Path] = true
+		}
+	}
+	for _, want := range []string{
+		"api_settings.webhooks.bad name!", "api_settings.webhooks.broken.url",
+		"api_settings.webhooks.broken.events[0]", "api_settings.webhooks.broken.events[1]", "api_settings.webhooks.broken.events[2]",
+		"api_settings.webhooks.broken.max_attempts", "api_settings.webhooks.none.events",
+	} {
+		if !errs[want] {
+			t.Errorf("missing error at %s (got %v)", want, errs)
+		}
+	}
+	for _, want := range []string{"api_settings.webhooks.broken.secret", "api_settings.webhooks.none.secret", "api_settings.webhooks.none.url"} {
+		if !warns[want] {
+			t.Errorf("missing warning at %s (got %v)", want, warns)
+		}
+	}
+	for path := range errs {
+		if strings.HasPrefix(path, "api_settings.webhooks.ok") {
+			t.Errorf("valid webhook rejected: %s", path)
+		}
+	}
+}

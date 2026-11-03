@@ -307,6 +307,8 @@ type APISettings struct {
 	CORS          CORSSettings                   `json:"cors,omitempty"`
 	// OpenAPI serves GET /meta/openapi.json; on unless set to false.
 	OpenAPI *bool `json:"openapi,omitempty"`
+	// Webhooks POST table changes to other systems, by name.
+	Webhooks map[string]Webhook `json:"webhooks,omitempty"`
 }
 
 // OpenAPIEnabled reports whether GET /meta/openapi.json is served.

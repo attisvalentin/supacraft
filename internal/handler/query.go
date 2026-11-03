@@ -235,15 +235,20 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// writeErrorJSON logs the full message and returns only its leading context
-// ("insert failed: <driver error>" → "insert failed"), so database and
-// filesystem details stay in the error log instead of reaching clients.
-func writeErrorJSON(w http.ResponseWriter, r *http.Request, status int, msg string) {
+// logError writes msg to the error log (a test's sandbox under supacraft test).
+func logError(r *http.Request, status int, msg string) {
 	if sb := pipeline.SandboxFrom(r.Context()); sb != nil && sb.Errors != nil {
 		sb.Errors(msg)
 	} else if errorlog.Global != nil {
 		errorlog.Global.Log(r.Header.Get("X-Tenant-ID"), r.Method, r.URL.Path, status, msg)
 	}
+}
+
+// writeErrorJSON logs the full message and returns only its leading context
+// ("insert failed: <driver error>" → "insert failed"), so database and
+// filesystem details stay in the error log instead of reaching clients.
+func writeErrorJSON(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	logError(r, status, msg)
 	if i := strings.Index(msg, ": "); i > 0 {
 		msg = msg[:i]
 	}

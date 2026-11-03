@@ -259,3 +259,81 @@ func TestRun_MasksEscapedSecrets(t *testing.T) {
 		t.Fatalf("secret leaked or not masked: %s", all)
 	}
 }
+
+func TestRun_Webhooks(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "hooks",
+  "auth_enabled": true,
+  "schema": {"tables": [{"name": "orders", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "total", "type": "int"}]}]},
+  "api_settings": {
+    "tables": {"orders": {"create": {"enabled": true}, "delete": {"enabled": true}}},
+    "webhooks": {
+      "erp": {"url": "${ERP_URL}", "events": ["orders.*"], "secret": "${ERP_SECRET}", "max_attempts": 1},
+      "crm": {"url": "https://crm.example.com/hook", "events": ["users.insert"], "secret": "${ERP_SECRET}"}
+    }
+  },
+  "functions": {
+    "atomic": {"route": {"path": "/fn/atomic", "method": "POST"}, "steps": [
+      {"type": "transaction", "steps": [
+        {"type": "db.insert", "table": "orders", "data": {"total": 5}},
+        {"type": "fail", "message": "rolled back"}]}]}
+  },
+  "seed": {"tables": {"orders": [{"id": "11111111-1111-1111-1111-111111111111", "total": 1}]}},
+  "tests": {
+    "create queues a delivery": {"call": "POST /create", "body": {"table_id": "orders", "data": {"total": 9}},
+      "expect": {"status": 201, "webhooks": [{"webhook": "erp", "event": "orders.insert", "rows": [{"total": 9}], "status": "pending"}]}},
+    "delivered through a mock": {"call": "POST /create", "body": {"table_id": "orders", "data": {"total": 9}}, "run_jobs": true,
+      "http_mocks": {"https://erp.example.com/": {"status": 200}},
+      "expect": {"webhooks": [{"webhook": "erp", "status": "done"}]}},
+    "a failing receiver": {"call": "POST /create", "body": {"table_id": "orders", "data": {"total": 9}}, "run_jobs": true,
+      "http_mocks": {"https://erp.example.com/": {"status": 500}},
+      "expect": {"webhooks": [{"webhook": "erp", "status": "failed"}]}},
+    "delete sends the deleted rows": {"call": "POST /delete", "body": {"table_id": "orders", "where": {"total": 1}},
+      "expect": {"webhooks": [{"event": "orders.delete", "rows": [{"id": "11111111-1111-1111-1111-111111111111", "total": 1}]}]}},
+    "a rolled back transaction sends nothing": {"call": "POST /fn/atomic", "expect": {"status": 400, "webhooks": []}},
+    "register sends no password": {"call": "POST /auth/register", "body": {"email": "a@x.co", "password": "Secret123!"},
+      "expect": {"status": 201, "webhooks": [{"webhook": "crm", "event": "users.insert", "rows": [{"email": "a@x.co"}]}]}}
+  }
+}`, "ERP_URL=https://erp.example.com/hook\nERP_SECRET=whsec_test\n")
+	results, err := Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if !r.Passed {
+			t.Errorf("%s: %v %v %s", r.Name, r.Failures, r.ServerErrors, r.Body)
+		}
+	}
+}
+
+// An update that moves rows out of its own where still answers and sends
+// the changed rows (RETURNING reads them as written).
+func TestRun_UpdateOutOfWhere(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "status",
+  "schema": {"tables": [{"name": "orders", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "status", "type": "varchar"}]}]},
+  "api_settings": {
+    "tables": {"orders": {"update": {"enabled": true}}},
+    "webhooks": {"erp": {"url": "https://erp.example.com/hook", "events": ["orders.update"], "secret": "${S}"}}
+  },
+  "functions": {"ship": {"route": {"path": "/fn/ship", "method": "POST"}, "steps": [
+    {"type": "db.update", "table": "orders", "where": {"status": "pending"}, "data": {"status": "shipped"}, "assign": "rows"},
+    {"type": "response", "data": {"rows": "{{rows}}"}}]}},
+  "seed": {"tables": {"orders": [{"id": "11111111-1111-1111-1111-111111111111", "status": "pending"}]}},
+  "tests": {
+    "endpoint": {"call": "POST /update", "body": {"table_id": "orders", "where": {"status": "pending"}, "data": {"status": "shipped"}},
+      "expect": {"status": 200, "body": {"data": {"status": "shipped"}}, "webhooks": [{"event": "orders.update", "rows": [{"status": "shipped"}]}]}},
+    "step": {"call": "POST /fn/ship",
+      "expect": {"status": 200, "body": {"rows": {"status": "shipped"}}, "webhooks": [{"event": "orders.update", "rows": [{"status": "shipped"}]}]}}
+  }
+}`, "S=x\n")
+	results, err := Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if !r.Passed {
+			t.Errorf("%s: %v %v %s", r.Name, r.Failures, r.ServerErrors, r.Body)
+		}
+	}
+}

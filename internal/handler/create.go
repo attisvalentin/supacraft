@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -64,15 +65,9 @@ func HandleCreate(pool *tenant.PoolManager) http.HandlerFunc {
 		}
 
 		insertSQL, args := query.BuildInsert(table.Name, req.Data)
-		res, err := dbPool.Exec(r.Context(), insertSQL, args...)
+		row, err := insertRow(r.Context(), dbPool, cfg, table, insertSQL, args)
 		if err != nil {
 			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("insert failed: %v", err))
-			return
-		}
-
-		row, err := readInsertedRow(r, dbPool, table, res, cfg)
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if row == nil {
@@ -84,28 +79,22 @@ func HandleCreate(pool *tenant.PoolManager) http.HandlerFunc {
 	}
 }
 
-// readInsertedRow re-fetches the freshly inserted row via last_insert_rowid()
-// and applies readable-flag filtering. Returns nil if no row matches.
-func readInsertedRow(r *http.Request, dbPool *tenant.DB, table *tenant.SchemaTable, res interface{ LastInsertId() (int64, error) }, cfg *tenant.TenantConfig) (map[string]any, error) {
-	lastID, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("last_insert_rowid: %v", err)
+// insertRow runs an INSERT and its webhooks atomically and returns the new
+// row (readable columns only), nil if it can't be read back.
+func insertRow(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, table *tenant.SchemaTable, insertSQL string, args []any) (map[string]any, error) {
+	rows, err := tenant.WriteWithWebhooks(ctx, db, cfg, table.Name, tenant.OpInsert, func(q tenant.Querier) ([]map[string]any, error) {
+		res, err := q.Exec(ctx, insertSQL, args...)
+		if err != nil {
+			return nil, err
+		}
+		lastID, err := res.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("last_insert_rowid: %w", err)
+		}
+		return queryRows(ctx, q, cfg, "SELECT * FROM "+query.QuoteIdent(table.Name)+" WHERE rowid = ?", lastID)
+	})
+	if err != nil || len(rows) == 0 {
+		return nil, err
 	}
-
-	selectSQL := "SELECT * FROM " + query.QuoteIdent(table.Name) + " WHERE rowid = ?"
-	rows, err := dbPool.Query(r.Context(), selectSQL, lastID)
-	if err != nil {
-		return nil, fmt.Errorf("select inserted: %v", err)
-	}
-	defer rows.Close()
-
-	loc := tenant.LoadTimezone(cfg.APISettings.Timezone)
-	results, err := query.ScanAllRowsToMaps(rows, loc)
-	if err != nil {
-		return nil, fmt.Errorf("scan inserted: %v", err)
-	}
-	if len(results) == 0 {
-		return nil, nil
-	}
-	return schema.FilterNonReadableFromRow(results[0], table), nil
+	return schema.FilterNonReadableFromRow(rows[0], table), nil
 }

@@ -190,12 +190,18 @@ func runOne(ctx context.Context, p *project.Project, seed *project.Seed, name st
 			fail("run_jobs: %v", err)
 		}
 	}
-	if t.Expect.Jobs != nil {
-		got, err := queuedJobs(ctx, db)
+	if t.Expect.Jobs != nil || t.Expect.Webhooks != nil {
+		jobList, hooks, err := queuedJobs(ctx, db)
 		if err != nil {
 			fail("jobs: %v", err)
-		} else {
-			for _, diff := range match("jobs", handler.MaskValue(any(t.Expect.Jobs), env), handler.MaskValue(any(got), env)) {
+		}
+		if err == nil && t.Expect.Jobs != nil {
+			for _, diff := range match("jobs", handler.MaskValue(any(t.Expect.Jobs), env), handler.MaskValue(any(jobList), env)) {
+				fail("%s", diff)
+			}
+		}
+		if err == nil && t.Expect.Webhooks != nil {
+			for _, diff := range match("webhooks", handler.MaskValue(any(t.Expect.Webhooks), env), handler.MaskValue(any(hooks), env)) {
 				fail("%s", diff)
 			}
 		}
@@ -295,24 +301,29 @@ func runJobs(ctx context.Context, pools *tenant.PoolManager, cfg *tenant.TenantC
 	return errors.New("jobs kept queueing jobs (stopped after 100 rounds)")
 }
 
-// queuedJobs lists the test database's jobs, oldest first.
-func queuedJobs(ctx context.Context, db *sql.DB) ([]any, error) {
+// queuedJobs lists the test database's function jobs and webhook
+// deliveries, oldest first.
+func queuedJobs(ctx context.Context, db *sql.DB) (jobList, hooks []any, err error) {
 	list, err := tenant.ListJobs(ctx, db, "", 1000)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := make([]any, len(list))
-	for i, j := range list {
-		args := map[string]any{}
-		for k, v := range j.Args {
-			args[k] = v
+	jobList, hooks = []any{}, []any{}
+	for i := len(list) - 1; i >= 0; i-- {
+		j := list[i]
+		if name, ok := tenant.WebhookName(j.Function); ok {
+			hooks = append(hooks, map[string]any{
+				"webhook": name, "event": j.Args["event"], "rows": j.Args["rows"],
+				"status": j.Status, "attempts": float64(j.Attempts), "last_error": j.LastError,
+			})
+			continue
 		}
-		out[len(list)-1-i] = map[string]any{
-			"function": j.Function, "args": args, "status": j.Status,
+		jobList = append(jobList, map[string]any{
+			"function": j.Function, "args": j.Args, "status": j.Status,
 			"attempts": float64(j.Attempts), "last_error": j.LastError,
-		}
+		})
 	}
-	return out, nil
+	return jobList, hooks, nil
 }
 
 // signIn issues an access token for a seed user, as /auth/login would.
