@@ -51,6 +51,9 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 				r.Post("/auth/reset-password", HandleResetPassword(pool))
 				r.Post("/auth/verify-email", HandleVerifyEmail(pool))
 				r.Post("/auth/resend-verification", HandleResendVerification(pool))
+				r.Get("/auth/oauth/{provider}/start", HandleOAuthStart(pool))
+				r.Get("/auth/oauth/{provider}/callback", HandleOAuthCallback(pool))
+				r.Post("/auth/oauth/exchange", HandleOAuthExchange(pool))
 			})
 
 			// Files

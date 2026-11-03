@@ -945,6 +945,37 @@ Both mail a one-time link and need `api_settings.email.smtp` and a template in `
 
 All four answer `404` when their flow isn't configured. A new verification link is also mailed on `/auth/register` when `email_verification` is set.
 
+#### Sign in with Google, GitHub or OpenID Connect
+
+```json
+{
+  "api_settings": {
+    "auth": {
+      "oauth": {
+        "public_url": "https://api.example.com",
+        "redirect_urls": ["https://app.example.com/auth/done"],
+        "providers": {
+          "google": { "client_id": "${GOOGLE_CLIENT_ID}", "client_secret": "${GOOGLE_CLIENT_SECRET}" },
+          "github": { "client_id": "${GITHUB_CLIENT_ID}", "client_secret": "${GITHUB_CLIENT_SECRET}" },
+          "company_sso": { "issuer": "https://login.example.com", "client_id": "${SSO_CLIENT_ID}", "client_secret": "${SSO_CLIENT_SECRET}" }
+        }
+      }
+    }
+  }
+}
+```
+- `google` and `github` are built in; any other name is an OpenID Connect provider found from its `issuer` (Microsoft Entra, GitLab, Auth0, Keycloak, Okta, …). `scopes` overrides the defaults (`openid email profile`; GitHub `read:user user:email`).
+- `public_url` is the API's public base URL. Register `<public_url>/auth/oauth/<provider>/callback` as the redirect/callback URL in each provider's console. `redirect_urls` are the app pages a sign-in may return to (matched exactly).
+
+| Step | Who | What |
+|---|---|---|
+| 1 | app | Open `GET /auth/oauth/<provider>/start?redirect_to=<one of redirect_urls>` in the browser (on a central server add `&tenant=<id>`). |
+| 2 | API → provider → API | The user signs in at the provider (PKCE, one-time state, 10 minutes). |
+| 3 | API → app | The browser lands on `redirect_to?code=<one-time code>` (valid 1 minute), or `?error=access_denied`, `email_not_verified`, `email_required`, `account_disabled`, `provider_error`, `server_error`. |
+| 4 | app | `POST /auth/oauth/exchange {"code"}` → the same `{token, refresh_token, expires_in}` as `/auth/login` (`400` for a bad code, `403` when `email_verification.required` and the email isn't verified). |
+
+- A provider account is linked to its user once. A new account creates a user (default role, `users.insert` webhooks) whose email is verified when the provider says so; it has no password until the user resets one. An existing user with the same email is linked only when the provider verified that email — otherwise sign-in fails with `email_not_verified`, so nobody takes over an account by claiming its email at a provider.
+
 ---
 
 ### CRUD Endpoints

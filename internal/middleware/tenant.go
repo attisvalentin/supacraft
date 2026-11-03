@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/tenant"
@@ -26,6 +27,9 @@ func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenantID := r.Header.Get("X-Tenant-ID")
+			if tenantID == "" {
+				tenantID = oauthTenant(r)
+			}
 			if tenantID == "" {
 				tenantID = defaultTenant
 				// Downstream handlers read the tenant from the header.
@@ -64,6 +68,23 @@ func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// oauthTenant is the tenant of an OAuth browser redirect, which can't carry
+// the X-Tenant-ID header: ?tenant= on the start URL, and the "<tenant>."
+// prefix of the state on the provider's callback.
+func oauthTenant(r *http.Request) string {
+	if !strings.HasPrefix(r.URL.Path, "/auth/oauth/") {
+		return ""
+	}
+	q := r.URL.Query()
+	if t := q.Get("tenant"); t != "" {
+		return t
+	}
+	if t, _, ok := strings.Cut(q.Get("state"), "."); ok {
+		return t
+	}
+	return ""
 }
 
 func TenantFromContext(ctx context.Context) *tenant.TenantConfig {

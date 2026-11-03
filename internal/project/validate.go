@@ -142,6 +142,7 @@ func (p *Project) Validate() []Issue {
 	v.apiSettings(settings)
 	v.authEmails(asMap(settings["auth"]), asMap(asMap(settings["email"])["smtp"]), p.AuthEnabled())
 	v.roles(settings, asMap(raw["functions"]), p.AuthEnabled())
+	v.oauth(asMap(settings["auth"])["oauth"], p.AuthEnabled())
 	v.functionsSection(asMap(raw["functions"]))
 	v.cronjobs(asMap(raw["cronjobs"]))
 	v.seedAndTests(raw, p.AuthEnabled())
@@ -331,6 +332,85 @@ func (v *validator) authEmails(auth, smtp map[string]any, authEnabled bool) {
 		}
 		if key == "password_reset" && flow["required"] != nil {
 			v.errorf(path+".required", "only applies to email_verification")
+		}
+	}
+}
+
+// httpURL checks an absolute http(s) URL; plain http is only fine for
+// localhost.
+func httpURL(raw string) (u *url.URL, ok, plainHTTP bool) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Fragment != "" {
+		return nil, false, false
+	}
+	local := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"
+	return u, true, u.Scheme == "http" && !local
+}
+
+// oauth checks api_settings.auth.oauth.
+func (v *validator) oauth(raw any, authEnabled bool) {
+	if raw == nil {
+		return
+	}
+	const path = "api_settings.auth.oauth"
+	o, ok := raw.(map[string]any)
+	if !ok {
+		v.errorf(path, "must be an object {public_url, redirect_urls, providers}")
+		return
+	}
+	if !authEnabled {
+		v.errorf(path, "needs auth_enabled: true")
+	}
+	public, _ := o["public_url"].(string)
+	if u, ok, plain := httpURL(public); !ok || (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
+		v.errorf(path+".public_url", "must be the API's public base URL, e.g. https://api.example.com (the providers call back to <public_url>/auth/oauth/<provider>/callback)")
+	} else if plain {
+		v.warnf(path+".public_url", "plain http sends sign-in codes unencrypted; use https")
+	}
+	redirects := asSlice(o["redirect_urls"])
+	if len(redirects) == 0 {
+		v.errorf(path+".redirect_urls", "list the app pages a sign-in may return to, e.g. [\"https://app.example.com/auth/done\"]")
+	}
+	for i, r := range redirects {
+		s, _ := r.(string)
+		if _, ok, plain := httpURL(s); !ok {
+			v.errorf(fmt.Sprintf("%s.redirect_urls[%d]", path, i), "must be an absolute http(s) URL without a #fragment")
+		} else if plain {
+			v.warnf(fmt.Sprintf("%s.redirect_urls[%d]", path, i), "plain http exposes the login code; use https")
+		}
+	}
+	providers := asMap(o["providers"])
+	if len(providers) == 0 {
+		v.errorf(path+".providers", "configure at least one provider: google, github, or any OpenID Connect provider with an issuer")
+	}
+	for name, raw := range providers {
+		pp := path + ".providers." + name
+		if !functionNameRe.MatchString(name) {
+			v.errorf(pp, "invalid provider name %q (letters, digits, _ and -)", name)
+		}
+		p, ok := raw.(map[string]any)
+		if !ok {
+			v.errorf(pp, "must be an object {client_id, client_secret, issuer?}")
+			continue
+		}
+		for _, key := range []string{"client_id", "client_secret"} {
+			if s, _ := p[key].(string); s == "" {
+				v.errorf(pp+"."+key, "is required")
+			}
+		}
+		if s, _ := p["client_secret"].(string); s != "" && !envref.Ref.MatchString(s) {
+			v.warnf(pp+".client_secret", "a secret stored in plain text; use \"${NAME}\" and put the value in .env")
+		}
+		issuer, _ := p["issuer"].(string)
+		switch {
+		case name == "google" || name == "github":
+			if issuer != "" {
+				v.errorf(pp+".issuer", "%s is built in; remove issuer", name)
+			}
+		default:
+			if u, ok, _ := httpURL(issuer); !ok || u.Scheme != "https" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
+				v.errorf(pp+".issuer", "an OpenID Connect provider needs its https issuer URL (google and github are built in)")
+			}
 		}
 	}
 }

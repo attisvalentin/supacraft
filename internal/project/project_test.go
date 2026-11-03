@@ -614,3 +614,47 @@ func TestValidate_Webhooks(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_OAuth(t *testing.T) {
+	p := load(t, `{"name": "x", "auth_enabled": true, "api_settings": {"auth": {"oauth": {
+	  "public_url": "https://api.example.com/v1",
+	  "redirect_urls": ["/done", "https://app.example.com/done#x"],
+	  "providers": {
+	    "google": {"client_id": "${G_ID}", "client_secret": "${G_SECRET}", "issuer": "https://accounts.google.com"},
+	    "github": {"client_id": "${GH_ID}", "client_secret": "${GH_SECRET}"},
+	    "sso": {"client_id": "x", "client_secret": "plain"},
+	    "corp": {"client_id": "x", "client_secret": "${C}", "issuer": "http://login.corp.example.com"}}}}}}`)
+	errs, warns := map[string]bool{}, map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			errs[i.Path] = true
+		} else {
+			warns[i.Path] = true
+		}
+	}
+	for _, want := range []string{
+		"api_settings.auth.oauth.public_url", "api_settings.auth.oauth.redirect_urls[0]", "api_settings.auth.oauth.redirect_urls[1]",
+		"api_settings.auth.oauth.providers.google.issuer", "api_settings.auth.oauth.providers.sso.issuer", "api_settings.auth.oauth.providers.corp.issuer",
+	} {
+		if !errs[want] {
+			t.Errorf("missing error at %s (got %v)", want, errs)
+		}
+	}
+	if !warns["api_settings.auth.oauth.providers.sso.client_secret"] {
+		t.Errorf("no warning for a plain-text client secret (got %v)", warns)
+	}
+	for path := range errs {
+		if strings.HasPrefix(path, "api_settings.auth.oauth.providers.github") {
+			t.Errorf("valid github provider rejected: %s", path)
+		}
+	}
+
+	p = load(t, `{"name": "x", "api_settings": {"auth": {"oauth": {"public_url": "https://a.example.com", "redirect_urls": ["https://b.example.com"], "providers": {"github": {"client_id": "a", "client_secret": "${B}"}}}}}}`)
+	found := false
+	for _, i := range p.Validate() {
+		found = found || (i.Path == "api_settings.auth.oauth" && i.Severity == "error")
+	}
+	if !found {
+		t.Error("oauth without auth_enabled accepted")
+	}
+}

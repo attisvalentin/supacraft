@@ -17,6 +17,24 @@ var AuthTokensDDL = []string{
 		"created_at" INTEGER NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS "_supacraft_auth_tokens_user" ON "_supacraft_auth_tokens" ("user_id", "purpose")`,
+	// A pending OAuth sign-in: the state sent to the provider (hashed),
+	// the PKCE verifier and where to return.
+	`CREATE TABLE IF NOT EXISTS "_supacraft_oauth_states" (
+		"state_hash"  TEXT PRIMARY KEY,
+		"provider"    TEXT NOT NULL,
+		"verifier"    TEXT NOT NULL,
+		"redirect_to" TEXT NOT NULL,
+		"expires_at"  INTEGER NOT NULL
+	)`,
+	// Which provider account belongs to which user.
+	`CREATE TABLE IF NOT EXISTS "_supacraft_identities" (
+		"provider"   TEXT NOT NULL,
+		"subject"    TEXT NOT NULL,
+		"user_id"    TEXT NOT NULL,
+		"email"      TEXT NOT NULL DEFAULT '',
+		"created_at" INTEGER NOT NULL,
+		PRIMARY KEY ("provider", "subject")
+	)`,
 }
 
 // authColumns are the built-in users columns the auth handlers query that
