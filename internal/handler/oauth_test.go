@@ -91,19 +91,27 @@ const oauthProject = `{
                        "steps": [{"type": "response", "data": {"email": "{{auth.email}}"}}]}}
 }`
 
-// appVerifier is the app's PKCE verifier in the tests; startQuery carries
-// its challenge.
+// appVerifier is the app's PKCE verifier in the tests that don't care;
+// startQuery carries a verifier's challenge.
 const appVerifier = "app-verifier-0123456789-0123456789-0123456789"
 
-func startQuery(extra string) string {
-	return "redirect_to=" + url.QueryEscape("https://app.example.com/done") + "&code_challenge=" + pkceChallenge(appVerifier) + "&code_challenge_method=S256" + extra
+func startQuery(extra string) string { return startQueryFor(appVerifier, extra) }
+
+func startQueryFor(verifier, extra string) string {
+	return "redirect_to=" + url.QueryEscape("https://app.example.com/done") + "&code_challenge=" + pkceChallenge(verifier) + "&code_challenge_method=S256" + extra
 }
 
-// signIn runs start → provider → callback and returns where the browser
-// lands at the app.
+// signIn runs start → provider → callback as a browser with its own
+// verifier, and returns where it lands at the app plus that verifier.
 func signIn(t *testing.T, a *testAPI, f *fakeProvider, provider string) url.Values {
 	t.Helper()
-	rec := a.raw("GET", "/auth/oauth/"+provider+"/start?"+startQuery(""), "")
+	back, _ := signInWith(t, a, f, provider, randomHex(24))
+	return back
+}
+
+func signInWith(t *testing.T, a *testAPI, f *fakeProvider, provider, verifier string) (url.Values, string) {
+	t.Helper()
+	rec := a.raw("GET", "/auth/oauth/"+provider+"/start?"+startQueryFor(verifier, ""), "")
 	if rec.Code != http.StatusFound {
 		t.Fatalf("start: %d %s", rec.Code, rec.Body)
 	}
@@ -115,7 +123,9 @@ func signIn(t *testing.T, a *testAPI, f *fakeProvider, provider string) url.Valu
 	if err != nil || back.Host != "app.example.com" {
 		t.Fatalf("callback went to %q", rec.Header().Get("Location"))
 	}
-	return back.Query()
+	q := back.Query()
+	q.Set("verifier", verifier)
+	return q, verifier
 }
 
 // rawClients spreads raw requests over client addresses: a sign-in takes
@@ -133,9 +143,9 @@ func (a *testAPI) raw(method, path, body string) *httptest.ResponseRecorder {
 func TestOAuth(t *testing.T) {
 	f := newFakeProvider(t)
 	a := newTestAPIWith(t, strings.Replace(oauthProject, "ISSUER", f.URL, 1))
-	exchange := func(code string) map[string]any {
+	exchange := func(back url.Values) map[string]any {
 		t.Helper()
-		status, out, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+code+`","code_verifier":"`+appVerifier+`"}`)
+		status, out, raw := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Get("code")+`","code_verifier":"`+back.Get("verifier")+`"}`)
 		if status != http.StatusOK {
 			t.Fatalf("exchange: %d %s", status, raw)
 		}
@@ -145,21 +155,24 @@ func TestOAuth(t *testing.T) {
 	// A new account creates a user who can call auth-only routes.
 	f.userinfo = map[string]any{"sub": "u-1", "email": "new@example.com", "email_verified": true}
 	back := signIn(t, a, f, "sso")
-	tokens := exchange(back.Get("code"))
+	tokens := exchange(back)
 	if status, out, raw := a.do("GET", "/fn/me", "", "Authorization", "Bearer "+tokens["token"].(string)); status != http.StatusOK || out["email"] != "new@example.com" {
 		t.Fatalf("me: %d %s", status, raw)
 	}
 	// The code and the state work once.
-	if status, _, _ := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Get("code")+`","code_verifier":"`+appVerifier+`"}`); status != http.StatusBadRequest {
+	if status, _, _ := a.do("POST", "/auth/oauth/exchange", `{"code":"`+back.Get("code")+`","code_verifier":"`+back.Get("verifier")+`"}`); status != http.StatusBadRequest {
 		t.Fatalf("code reused: %d", status)
 	}
-	// Login CSRF: a code from someone else's sign-in fails without the
-	// verifier of the browser that started it.
+	// Login CSRF: the attacker's code, carried to the victim's browser,
+	// fails with the verifier of the victim's own sign-in.
 	f.userinfo = map[string]any{"sub": "attacker-1", "email": "mallory@example.com", "email_verified": true}
-	stolen := signIn(t, a, f, "sso").Get("code")
-	if status, _, _ := a.do("POST", "/auth/oauth/exchange", `{"code":"`+stolen+`","code_verifier":"the-victims-own-verifier-0123456789-0123456789"}`); status != http.StatusBadRequest {
-		t.Fatalf("code exchanged with another verifier: %d", status)
+	attacker, _ := signInWith(t, a, f, "sso", "attackers-verifier-0123456789-0123456789-0123")
+	f.userinfo = map[string]any{"sub": "victim-1", "email": "victim@example.com", "email_verified": true}
+	victim, _ := signInWith(t, a, f, "sso", "victims-verifier-0123456789-0123456789-012345")
+	if status, _, _ := a.do("POST", "/auth/oauth/exchange", `{"code":"`+attacker.Get("code")+`","code_verifier":"`+victim.Get("verifier")+`"}`); status != http.StatusBadRequest {
+		t.Fatalf("a code was exchanged with another sign-in's verifier: %d", status)
 	}
+	exchange(victim)
 	// An OAuth-only user has no password to log in with.
 	if status, _, _ := a.do("POST", "/auth/login", `{"email":"new@example.com","password":"!oauth"}`); status != http.StatusUnauthorized {
 		t.Fatalf("password login for an OAuth user: %d", status)
@@ -171,7 +184,7 @@ func TestOAuth(t *testing.T) {
 	id := a.register("ann@example.com")
 	preSession := a.login("ann@example.com")
 	f.userinfo = map[string]any{"sub": "u-2", "email": "ann@example.com", "email_verified": "true"}
-	exchange(signIn(t, a, f, "sso").Get("code"))
+	exchange(signIn(t, a, f, "sso"))
 	if status, _, _ := a.do("POST", "/auth/login", `{"email":"ann@example.com","password":"Secret123!"}`); status != http.StatusUnauthorized {
 		t.Fatalf("the pre-registered password still works: %d", status)
 	}
@@ -180,7 +193,7 @@ func TestOAuth(t *testing.T) {
 	}
 	// The next sign-in finds the link, whatever the email says now.
 	f.userinfo = map[string]any{"sub": "u-2", "email": "changed@example.com", "email_verified": false}
-	tokens = exchange(signIn(t, a, f, "sso").Get("code"))
+	tokens = exchange(signIn(t, a, f, "sso"))
 	if _, out, _ := a.do("GET", "/fn/me", "", "Authorization", "Bearer "+tokens["token"].(string)); out["email"] != "ann@example.com" {
 		t.Fatalf("linked account signed in as %v (user %s)", out["email"], id)
 	}
@@ -203,7 +216,7 @@ func TestOAuth(t *testing.T) {
 		oauth.GitHubAuthURL, oauth.GitHubTokenURL, oauth.GitHubAPI = "https://github.com/login/oauth/authorize", "https://github.com/login/oauth/access_token", "https://api.github.com"
 	})
 	f.ghEmails = []map[string]any{{"email": "other@example.com", "primary": false, "verified": true}, {"email": "gh@example.com", "primary": true, "verified": true}}
-	tokens = exchange(signIn(t, a, f, "github").Get("code"))
+	tokens = exchange(signIn(t, a, f, "github"))
 	if _, out, _ := a.do("GET", "/fn/me", "", "Authorization", "Bearer "+tokens["token"].(string)); out["email"] != "gh@example.com" {
 		t.Fatalf("github user: %v", out)
 	}

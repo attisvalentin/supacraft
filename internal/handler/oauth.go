@@ -186,7 +186,8 @@ func HandleOAuthCallback(pool *tenant.PoolManager) http.HandlerFunc {
 		}
 		code := randomHex(32)
 		now := time.Now()
-		if _, err := dbPool.Exec(r.Context(), `DELETE FROM "_supacraft_oauth_codes" WHERE "expires_at" < ?`, now.Unix()); err == nil {
+		_, err = dbPool.Exec(r.Context(), `DELETE FROM "_supacraft_oauth_codes" WHERE "expires_at" < ?`, now.Unix())
+		if err == nil {
 			_, err = dbPool.Exec(r.Context(),
 				`INSERT INTO "_supacraft_oauth_codes" ("code_hash", "user_id", "app_challenge", "expires_at") VALUES (?, ?, ?, ?)`,
 				hashToken(code), userID, appChallenge, now.Add(oauthCodeTTL).Unix())
