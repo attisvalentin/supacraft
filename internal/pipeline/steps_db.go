@@ -375,15 +375,12 @@ func ExecuteDBUpdate(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 		return fmt.Errorf("db.update: build where: %w", err)
 	}
 
+	// RETURNING reads the rows as changed, even when the change moves them
+	// out of the WHERE (status: pending → shipped).
 	updateSQL, args := query.BuildUpdate(table.Name, resolvedData, whereSql, whereArgs)
-	if _, err := deps.DBPool.Exec(ctx, updateSQL, args...); err != nil {
-		return fmt.Errorf("db.update: exec failed: %w", err)
-	}
-
-	selectSQL, selectArgs := query.BuildSelect(table.Name, allColumnNames(table), whereSql, whereArgs, "", "", nil)
-	rows, err := deps.DBPool.Query(ctx, selectSQL, selectArgs...)
+	rows, err := deps.DBPool.Query(ctx, updateSQL+" RETURNING *", args...)
 	if err != nil {
-		return fmt.Errorf("db.update: select updated: %w", err)
+		return fmt.Errorf("db.update: exec failed: %w", err)
 	}
 	defer rows.Close()
 
@@ -424,31 +421,32 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 
 	sql, args := query.BuildDelete(table.Name, whereSql, whereArgs)
 
-	// A webhook gets the deleted rows, so read them first.
+	// A webhook gets the deleted rows: RETURNING reads exactly those.
 	var deleted []map[string]any
+	var affected int64
 	if deps.Config.WantsWebhook(table.Name, tenant.OpDelete) {
-		selectSQL, selectArgs := query.BuildSelect(table.Name, allColumnNames(table), whereSql, whereArgs, "", "", nil)
-		rows, err := deps.DBPool.Query(ctx, selectSQL, selectArgs...)
+		rows, err := deps.DBPool.Query(ctx, sql+" RETURNING *", args...)
 		if err != nil {
-			return fmt.Errorf("db.delete: read rows: %w", err)
+			return fmt.Errorf("db.delete: query failed: %w", err)
 		}
 		deleted, err = query.ScanAllRowsToMaps(rows, deps.Timezone)
 		rows.Close()
 		if err != nil {
 			return err
 		}
-	}
-
-	res, err := deps.DBPool.Exec(ctx, sql, args...)
-	if err != nil {
-		return fmt.Errorf("db.delete: query failed: %w", err)
+		affected = int64(len(deleted))
+	} else {
+		res, err := deps.DBPool.Exec(ctx, sql, args...)
+		if err != nil {
+			return fmt.Errorf("db.delete: query failed: %w", err)
+		}
+		affected, _ = res.RowsAffected()
 	}
 	if err := tenant.EmitWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpDelete, deleted); err != nil {
 		return fmt.Errorf("db.delete: %w", err)
 	}
 
 	if step.Assign != "" {
-		affected, _ := res.RowsAffected()
 		pCtx.Set(step.Assign, map[string]any{
 			"deleted": affected,
 		})

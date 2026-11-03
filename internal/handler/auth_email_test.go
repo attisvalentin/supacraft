@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"regexp"
 	"strings"
@@ -27,7 +28,8 @@ const authEmailProject = `{
     "auth": {
       "password_reset": {"template": "reset", "url": "https://app.example.com/reset?token={token}"},
       "email_verification": {"template": "verify", "url": "https://app.example.com/verify?token={token}", "required": true}
-    }
+    },
+    "webhooks": {"audit": {"url": "https://audit.example.com/hook", "events": ["users.update"], "secret": "s3cret-hook"}}
   },
   "functions": {
     "me": {"route": {"path": "/fn/me", "method": "GET", "auth_required": true},
@@ -157,6 +159,23 @@ func TestAuthEmails_VerifyThenReset(t *testing.T) {
 	}
 	if code, _, raw := a.do("POST", "/auth/refresh", `{"refresh_token":"`+fresh["refresh_token"].(string)+`"}`); code != http.StatusOK {
 		t.Fatalf("new refresh token: %d %s", code, raw)
+	}
+
+	// Verification and the reset each sent users.update, without the hash.
+	db, err := sql.Open("sqlite", a.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := tenant.ListJobs(context.Background(), db, "", 10)
+	if err != nil || len(jobs) != 2 {
+		t.Fatalf("users.update deliveries: %+v %v", jobs, err)
+	}
+	for _, j := range jobs {
+		row := j.Args["rows"].([]any)[0].(map[string]any)
+		if j.Args["event"] != "users.update" || row["email"] != email || row["password"] != nil || row["session_version"] != nil {
+			t.Fatalf("delivery: %+v", j.Args)
+		}
 	}
 }
 

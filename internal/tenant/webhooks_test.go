@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -59,4 +60,44 @@ func TestEmitWebhooks(t *testing.T) {
 	if err := EmitWebhooks(ctx, db, cfg, "users", OpUpdate, nil); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSetUserRole_EmitsUpdate(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := writeTestTenant(dir, "shop", `{"db_name": "shop", "auth_enabled": true, "enabled": true,
+	  "schema": {"tables": [{"name": "users", "columns": [{"name": "id"}, {"name": "email"}, {"name": "role"}, {"name": "password", "readable": false}]}]},
+	  "api_settings": {"auth": {"roles": ["user", "admin"]},
+	    "webhooks": {"crm": {"url": "https://crm.example.com", "events": ["users.update"]}}}}`); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "shop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT, password TEXT, role TEXT, is_active INTEGER, email_verified INTEGER, session_version INTEGER, created_at TEXT, updated_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO users (id, email, password) VALUES ('u1', 'a@x.co', 'hash')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetUserRole(ctx, dir, "shop", "a@x.co", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := ListJobs(ctx, db, "", 10)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("deliveries: %+v %v", jobs, err)
+	}
+	row := jobs[0].Args["rows"].([]any)[0].(map[string]any)
+	if row["role"] != "admin" || row["password"] != nil {
+		t.Fatalf("payload: %+v", row)
+	}
+}
+
+func writeTestTenant(dataDir, id, cfg string) error {
+	if err := os.MkdirAll(filepath.Join(dataDir, "tenants"), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dataDir, "tenants", id+".json"), []byte(cfg), 0o644)
 }

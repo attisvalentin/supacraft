@@ -17,18 +17,11 @@ func emitWebhooks(r *http.Request, db *tenant.DB, cfg *tenant.TenantConfig, tabl
 	}
 }
 
-// rowsBeforeDelete reads the rows a delete will remove, when a webhook
-// wants them; nil otherwise.
-func rowsBeforeDelete(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, table *tenant.SchemaTable, whereSQL string, whereArgs []any) ([]map[string]any, error) {
-	if !cfg.WantsWebhook(table.Name, tenant.OpDelete) {
-		return nil, nil
-	}
-	cols := make([]string, len(table.Columns))
-	for i, c := range table.Columns {
-		cols[i] = c.Name
-	}
-	stmt, args := query.BuildSelect(table.Name, cols, whereSQL, whereArgs, "", "", nil)
-	rows, err := db.Query(ctx, stmt, args...)
+// queryRows runs a statement with RETURNING * and reads the rows it
+// changed: an UPDATE's rows after the change, a DELETE's removed rows.
+// Reading them in the same statement keeps them exactly the rows written.
+func queryRows(ctx context.Context, q tenant.Querier, cfg *tenant.TenantConfig, stmt string, args ...any) ([]map[string]any, error) {
+	rows, err := q.Query(ctx, stmt+" RETURNING *", args...)
 	if err != nil {
 		return nil, err
 	}

@@ -78,19 +78,23 @@ func HandleDelete(pool *tenant.PoolManager) http.HandlerFunc {
 			return
 		}
 
-		deleted, err := rowsBeforeDelete(r.Context(), dbPool, cfg, table, whereSql, whereArgs)
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("read rows to delete: %v", err))
-			return
+		var affected int64
+		if cfg.WantsWebhook(table.Name, tenant.OpDelete) {
+			deleted, err := queryRows(r.Context(), dbPool, cfg, sql, args...)
+			if err != nil {
+				writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("delete failed: %v", err))
+				return
+			}
+			affected = int64(len(deleted))
+			emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpDelete, deleted)
+		} else {
+			result, err := dbPool.Exec(r.Context(), sql, args...)
+			if err != nil {
+				writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("delete failed: %v", err))
+				return
+			}
+			affected, _ = result.RowsAffected()
 		}
-		result, err := dbPool.Exec(r.Context(), sql, args...)
-		if err != nil {
-			writeErrorJSON(w, r, http.StatusInternalServerError, fmt.Sprintf("delete failed: %v", err))
-			return
-		}
-		emitWebhooks(r, dbPool, cfg, table.Name, tenant.OpDelete, deleted)
-
-		affected, _ := result.RowsAffected()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"data": map[string]any{"deleted": affected},
 		})

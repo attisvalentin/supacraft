@@ -305,3 +305,35 @@ func TestRun_Webhooks(t *testing.T) {
 		}
 	}
 }
+
+// An update that moves rows out of its own where still answers and sends
+// the changed rows (RETURNING reads them as written).
+func TestRun_UpdateOutOfWhere(t *testing.T) {
+	p := writeProject(t, `{
+  "name": "status",
+  "schema": {"tables": [{"name": "orders", "columns": [{"name": "id", "type": "uuid", "primary": true}, {"name": "status", "type": "varchar"}]}]},
+  "api_settings": {
+    "tables": {"orders": {"update": {"enabled": true}}},
+    "webhooks": {"erp": {"url": "https://erp.example.com/hook", "events": ["orders.update"], "secret": "${S}"}}
+  },
+  "functions": {"ship": {"route": {"path": "/fn/ship", "method": "POST"}, "steps": [
+    {"type": "db.update", "table": "orders", "where": {"status": "pending"}, "data": {"status": "shipped"}, "assign": "rows"},
+    {"type": "response", "data": {"rows": "{{rows}}"}}]}},
+  "seed": {"tables": {"orders": [{"id": "11111111-1111-1111-1111-111111111111", "status": "pending"}]}},
+  "tests": {
+    "endpoint": {"call": "POST /update", "body": {"table_id": "orders", "where": {"status": "pending"}, "data": {"status": "shipped"}},
+      "expect": {"status": 200, "body": {"data": {"status": "shipped"}}, "webhooks": [{"event": "orders.update", "rows": [{"status": "shipped"}]}]}},
+    "step": {"call": "POST /fn/ship",
+      "expect": {"status": 200, "body": {"rows": {"status": "shipped"}}, "webhooks": [{"event": "orders.update", "rows": [{"status": "shipped"}]}]}}
+  }
+}`, "S=x\n")
+	results, err := Run(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if !r.Passed {
+			t.Errorf("%s: %v %v %s", r.Name, r.Failures, r.ServerErrors, r.Body)
+		}
+	}
+}
