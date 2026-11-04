@@ -4,9 +4,9 @@
 
 **Describe a backend in plain English. Get a running REST API.**
 
-SupaCraft is an open-source backend that an AI agent builds for you: database, user accounts,
-API endpoints, file uploads, emails and scheduled jobs, all defined in one JSON file and
-served by one small binary.
+SupaCraft is an open-source backend that an AI agent builds for you: database, user accounts
+and roles, Google/GitHub sign-in, API endpoints, file uploads, emails, background jobs,
+webhooks and live updates, all defined in one JSON file and served by one small binary.
 
 [![CI](https://github.com/attisvalentin/supacraft/actions/workflows/ci.yml/badge.svg)](https://github.com/attisvalentin/supacraft/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -46,11 +46,18 @@ want a real backend in minutes rather than days and you don't want to run anyone
 |---|---|
 | 🗄️ **Database** | SQLite tables generated from your schema, migrated automatically when you add tables or columns |
 | 🔐 **Auth** | Register, login and refresh with JWT, password reset and email verification by email; per-endpoint auth and row-level policies |
+| 🔑 **Sign in with Google, GitHub or any OpenID Connect provider** | Microsoft Entra, GitLab, Auth0, Keycloak, Okta, …; accounts link by verified email only |
+| 👥 **Roles** | `user`, `editor`, `admin` or your own; limit any table method, file endpoint or function to some roles |
 | ⚡ **Custom endpoints** | `/fn/posts/{id}` routes built from steps: queries with joins and aggregates, transactions, input validation, if/else, loops, try/catch, math, HTTP calls, emails |
 | ⏰ **Cron jobs** | The same steps on a schedule (`0 3 * * *`) |
+| 🧵 **Background jobs** | `job.enqueue` runs a function later, retried with backoff up to its attempt limit; survives restarts |
+| 🪝 **Webhooks** | Table changes POSTed to other systems and retried; signed (HMAC) when you give them a secret |
+| 📡 **Realtime** | Clients subscribe over a WebSocket and get each change, filtered by the same access rules as `/query` |
 | 📁 **File storage** | Upload/download endpoints backed by local disk, S3/R2/MinIO, GCS, Azure, FTP or SFTP |
 | ✉️ **Email** | SMTP with templates |
-| 🤖 **AI-native** | Built-in MCP server: the agent edits, validates, migrates, calls endpoints and queries data |
+| 🧪 **Seed data and tests** | Development data and request-level tests in the same file; tests run on a fresh database with emails captured and HTTP calls mocked |
+| 📜 **OpenAPI 3.1** | Generated from your config for Swagger UI, Postman or typed clients |
+| 🤖 **AI-native** | Built-in MCP server: the agent builds, tests and deploys the project and manages the central server, and asks you before anything risky |
 | 🔍 **Studio** | Read-only web UI to browse your data |
 | 🏢 **Many APIs, one server** | One `serve` process hosts every project; `supacraft deploy` adds or updates one live; `${NAME}` secrets stay on the server |
 
@@ -68,6 +75,7 @@ agent › set_table posts ✓   set_table comments ✓   set_relations ✓
         call_endpoint POST /auth/register → 201
         call_endpoint POST /fn/posts → 201
         call_endpoint GET  /fn/posts → 200 [1 post]
+        set_seed ✓   set_test ×3 ✓   run_tests → 3 passed
 
       Done. Your API is running on http://localhost:8080.
 ```
@@ -200,6 +208,79 @@ curl localhost:8080/fn/posts
 
 The `users` table and the auth endpoints come from `"auth_enabled": true`; you don't declare them.
 
+### More in the same file
+
+Roles, GitHub sign-in, a live comment feed, a webhook, seed users and tests are all a few lines more:
+
+```json
+{
+  "name": "blog",
+  "auth_enabled": true,
+  "schema": {
+    "tables": [
+      { "name": "posts", "columns": [
+        { "name": "id", "type": "uuid", "primary": true },
+        { "name": "title", "type": "varchar", "nullable": false } ] },
+      { "name": "comments", "columns": [
+        { "name": "id", "type": "uuid", "primary": true },
+        { "name": "post_id", "type": "uuid" },
+        { "name": "body", "type": "text" } ] }
+    ]
+  },
+  "api_settings": {
+    "cors": { "allowed_origin": "https://blog.example.com" },
+    "auth": {
+      "roles": ["reader", "editor"],
+      "oauth": {
+        "public_url": "https://api.example.com",
+        "redirect_urls": ["https://blog.example.com/signed-in"],
+        "providers": { "github": { "client_id": "${GITHUB_CLIENT_ID}", "client_secret": "${GITHUB_CLIENT_SECRET}" } }
+      }
+    },
+    "tables": {
+      "posts": { "query": { "enabled": true }, "create": { "enabled": true, "roles": ["editor"] } },
+      "comments": { "query": { "enabled": true }, "create": { "enabled": true, "auth": true } }
+    },
+    "realtime": { "tables": ["comments"] },
+    "webhooks": {
+      "new_post": { "url": "${NEW_POST_HOOK_URL}", "events": ["posts.insert"], "secret": "${NEW_POST_HOOK_SECRET}" }
+    }
+  },
+  "seed": {
+    "users": [{ "email": "editor@example.com", "role": "editor" }, { "email": "reader@example.com" }]
+  },
+  "tests": {
+    "readers can't publish": {
+      "call": "POST /create", "as": "reader@example.com",
+      "body": { "table_id": "posts", "data": { "title": "Hi" } },
+      "expect": { "status": 403 }
+    },
+    "editors publish and the webhook fires": {
+      "call": "POST /create", "as": "editor@example.com",
+      "body": { "table_id": "posts", "data": { "title": "Hi" } },
+      "expect": { "status": 201, "webhooks": [{ "webhook": "new_post", "event": "posts.insert" }] }
+    }
+  }
+}
+```
+
+```bash
+supacraft test                                        # 2 passed: fresh database, nothing sent anywhere
+supacraft users set-role alice@example.com editor     # promote a real user
+supacraft realtime tail comments                      # operator log: every change, no subscriber filters
+```
+
+A browser follows the comments live:
+
+```js
+const ws = new WebSocket("wss://api.example.com/realtime");
+ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", id: "c", table: "comments", where: { post_id: postId } }));
+ws.onmessage = (e) => console.log(JSON.parse(e.data)); // {type: "change", event: "insert", row: {...}, seq}
+```
+
+Every option is in the [reference](internal/docs/reference.md): the WebSocket protocol, the OAuth flow, webhook
+signatures, job retries and the test format.
+
 ## How it works
 
 ```text
@@ -234,10 +315,21 @@ The `users` table and the auth endpoints come from `"auth_enabled": true`; you d
 | `supacraft tenants` | `list`, `disable`, `enable`, `remove [--purge]` tenants of a central server and show their `errors`, from your machine (`--server`) or on the server (`--data-dir`) |
 | `supacraft deploy` | Send `supacraft.json` to a central server: validate, migrate, go live (`--dry-run` first). Values from `.env` are never sent; write secrets as `${NAME}` references, since literal values in `supacraft.json` are sent |
 | `supacraft secrets` | `set`, `unset`, `list` a tenant's secrets on a central server (values never leave the server) |
+| `supacraft seed` | Load the seed data into the local database (`--reset` to start from exactly the seed) |
+| `supacraft test [name...]` | Run the tests on a fresh seeded database each; exits non-zero on failure, so it fits CI |
+| `supacraft users` | `list` users and `set-role <email> <role>`, locally or on a central server |
+| `supacraft jobs` | `list`, `retry` and `enqueue` background jobs (webhook deliveries show up as `webhook:<name>`) |
+| `supacraft realtime tail [table]` | Print table changes as they happen (`--since <seq>`) |
+| `supacraft openapi` | Print the API as an OpenAPI 3.1 document (`-o openapi.json`) |
 | `supacraft studio` | Open a read-only data browser |
 | `supacraft service install` | Install `serve` as a systemd service (Linux); `--data-dir` for a central server |
 
 Every command accepts `--dir` / `-C` to point at a project directory.
+
+`users`, `jobs` and `realtime` act on the central server when `--server` / `SUPACRAFT_SERVER` (from your machine)
+or `--data-dir` / `SUPACRAFT_DATA_DIR` (on the server) is set, and on the project's own database otherwise.
+`--local` picks the project's database even when the environment names a server; it can't be combined with
+`--server` or `--data-dir`.
 
 `dev`, `mcp` and `studio` listen on `127.0.0.1` only, so your work-in-progress API is not reachable
 from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a phone).
@@ -245,19 +337,34 @@ from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a
 
 ## MCP tools
 
+The agent can manage the project and the central server the way you do with the CLI, through
+the tools below. Editing the local project and calling its API run directly. Changes to a
+central server, deleting data (`seed` with `reset`), user role changes and the systemd service
+wait for **your** approval: the agent's request shows up as a prompt in your MCP client that only
+you can answer, bound to that exact action (an approval for one deploy can't be reused for
+another). Secret values never pass through the agent; you set them with `supacraft secrets set`.
+
 | Tool | Purpose |
 |---|---|
+| `init_project` | Create a project in a folder that has none and start its API |
 | `get_config`, `get_reference` | Read the project and the full format reference |
 | `set_table`, `delete_table`, `set_relations` | Shape the database |
 | `set_function`, `delete_function` | Custom `/fn/...` endpoints |
 | `set_cronjob`, `delete_cronjob` | Scheduled jobs |
-| `update_api_settings`, `set_auth` | Permissions, CORS, rate limits, email, storage, env |
+| `update_api_settings`, `set_auth` | Permissions, roles, OAuth, webhooks, realtime, CORS, rate limits, email, storage, env |
 | `validate`, `apply` | Check, or apply hand-made edits |
+| `set_seed`, `seed`, `set_test`, `run_tests` | Seed data and tests (`seed` with `reset` asks you first) |
 | `call_endpoint` | Send a real HTTP request to the running API |
 | `query_db` | Read-only SQL against the database (the JWT key and password hashes are not readable) |
 | `get_logs` | Recent server errors (5xx) of the local API |
+| `get_openapi` | The API as an OpenAPI 3.1 document |
+| `list_users`, `set_user_role` | Users and their roles; every role change asks you first |
+| `get_jobs`, `enqueue_job`, `retry_job` | Background jobs (on a central server, queueing and retrying ask you first) |
+| `get_changes` | The realtime change log |
+| `deploy`, `manage_tenant`, `unset_secret` | Central server: deploy, disable/enable/remove a tenant, delete a secret (each asks you first) |
 | `get_server_errors`, `list_tenants` | Errors of this project on the central server (secret values masked), and every API on it |
 | `check_secrets` | Which `${NAME}` secrets are missing (names only), and the command the user runs to set them |
+| `service` | The systemd service on this machine (`install` and `uninstall` ask you first) |
 
 The full `supacraft.json` reference is [internal/docs/reference.md](internal/docs/reference.md).
 Agents get it as the `supacraft://reference` resource.
@@ -376,11 +483,20 @@ addresses. To back up the app, back up `.supacraft/`
 | `MAX_BODY_SIZE` | `1048576` | Max JSON request body in bytes |
 | `MAX_FILE_SIZE` | `104857600` | Max upload size in bytes |
 | `STUDIO_SECRET` | random | Studio password |
+| `DISABLE_CRON` | off | Don't run cron jobs, background jobs or webhook deliveries in this process |
 | `SUPACRAFT_DATA_DIR` | — | Central data directory (same as `--data-dir`) |
 | `SUPACRAFT_ADMIN_SECRET` | off | Signs remote management (deploys, secrets) of a central server; at least 32 characters (`openssl rand -hex 32`). Admin endpoints are off without it |
 | `SUPACRAFT_SERVER` | — | On your machine: URL of the central server for `supacraft deploy` and `supacraft secrets` |
 
 ## Security
+
+- Secret values stay in `.env` or on the server; configs, deploys, logs, API and MCP responses carry only `${NAME}` references.
+- Passwords are bcrypt-hashed; a password reset or a disabled user ends every session, including open WebSockets.
+- Clients only ever see readable columns, and a table's row policy applies wherever clients read it: `/query`, includes and realtime.
+- OAuth uses PKCE towards the provider and a second, app-held PKCE against login CSRF; an account links only through an email the provider verified.
+- Webhooks with a `secret` are signed (`X-SupaCraft-Signature`, HMAC-SHA256 with a timestamp) so receivers can reject forgeries and replays; validation warns about one without.
+- The table schema is never served over HTTP; the OpenAPI document (which can be turned off) lists only callable endpoints.
+- Central-server management is signed with `SUPACRAFT_ADMIN_SECRET` and off without it.
 
 Found a vulnerability? Please report it privately through
 [GitHub Security Advisories](https://github.com/attisvalentin/supacraft/security/advisories/new)
@@ -401,7 +517,9 @@ language.
 
 These are open for discussion, and PRs are welcome:
 
-- OpenAPI export so agents and frontends can generate typed clients
+- Sign in with Apple
+- Realtime broadcast (client-to-client messages) and presence (who is online)
+- A realtime event when an update moves a row out of a subscription's filter
 - Destructive migrations (rename/drop) with explicit confirmation
 - Optional visual schema viewer in Studio
 - PostgreSQL as an alternative storage driver
