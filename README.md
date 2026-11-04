@@ -327,8 +327,9 @@ signatures, job retries and the test format.
 Every command accepts `--dir` / `-C` to point at a project directory.
 
 `users`, `jobs` and `realtime` act on the central server when `--server` / `SUPACRAFT_SERVER` (from your machine)
-or `--data-dir` / `SUPACRAFT_DATA_DIR` (on the server) is set, and on the project's own database otherwise
-(`--local` forces that).
+or `--data-dir` / `SUPACRAFT_DATA_DIR` (on the server) is set, and on the project's own database otherwise.
+`--local` picks the project's database even when the environment names a server; it can't be combined with
+`--server` or `--data-dir`.
 
 `dev`, `mcp` and `studio` listen on `127.0.0.1` only, so your work-in-progress API is not reachable
 from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a phone).
