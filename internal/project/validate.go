@@ -67,12 +67,15 @@ var (
 )
 
 type validator struct {
-	issues    []Issue
-	tables    map[string]map[string]bool // table → columns
-	functions map[string]bool
-	private   map[string]bool // PRIVATE functions, which jobs may run
-	templates map[string]bool
-	relations []relationEnds
+	issues []Issue
+	tables map[string]map[string]bool // table → columns
+	// readableKey: tables with a readable primary key, which realtime
+	// clients use to apply changes.
+	readableKey map[string]bool
+	functions   map[string]bool
+	private     map[string]bool // PRIVATE functions, which jobs may run
+	templates   map[string]bool
+	relations   []relationEnds
 }
 
 type relationEnds struct {
@@ -160,6 +163,7 @@ func (p *Project) Validate() []Issue {
 func (v *validator) schema(schema map[string]any, authEnabled bool) {
 	if authEnabled {
 		v.tables["users"] = map[string]bool{}
+		v.readableKey = map[string]bool{"users": true} // the injected id
 		for _, c := range authUserColumns {
 			v.tables["users"][c["name"].(string)] = true
 		}
@@ -210,6 +214,12 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 			}
 			seen[cname] = true
 			v.tables[name][cname] = true
+			if primary, _ := cm["primary"].(bool); primary && cm["readable"] != false {
+				if v.readableKey == nil {
+					v.readableKey = map[string]bool{}
+				}
+				v.readableKey[name] = true
+			}
 
 			ctype, _ := cm["type"].(string)
 			if !columnTypes[strings.ToLower(ctype)] {
@@ -279,6 +289,7 @@ func (v *validator) apiSettings(s map[string]any) {
 		v.errorf("api_settings.auth.password_min_length", "must be at most %d (bcrypt uses only the first %d bytes)", tenant.MaxPasswordBytes, tenant.MaxPasswordBytes)
 	}
 	v.webhooks(asMap(s["webhooks"]))
+	v.realtime(s)
 	if val, ok := s["openapi"]; ok && val != nil {
 		if _, isBool := val.(bool); !isBool {
 			v.errorf("api_settings.openapi", "must be true or false")
@@ -418,6 +429,44 @@ func (v *validator) oauth(raw any, authEnabled bool) {
 var webhookOps = setOf("insert", "update", "delete", "*")
 
 // webhooks checks api_settings.webhooks.
+// realtime checks api_settings.realtime: each streamed table exists and
+// has query enabled, whose access rules decide what subscribers get.
+func (v *validator) realtime(s map[string]any) {
+	raw, set := s["realtime"]
+	if !set || raw == nil {
+		return
+	}
+	rt, ok := raw.(map[string]any)
+	if !ok {
+		v.errorf("api_settings.realtime", "must be an object {tables: [...]}")
+		return
+	}
+	tables, ok := rt["tables"].([]any)
+	if !ok {
+		v.errorf("api_settings.realtime.tables", "must list the tables whose changes are streamed")
+		return
+	}
+	seen := map[string]bool{}
+	for i, t := range tables {
+		path := fmt.Sprintf("api_settings.realtime.tables[%d]", i)
+		name, _ := t.(string)
+		switch {
+		case v.tables[name] == nil:
+			v.errorf(path, "unknown table %v", t)
+		case seen[name]:
+			v.errorf(path, "%s is listed twice", name)
+		default:
+			if enabled, _ := asMap(asMap(asMap(s["tables"])[name])["query"])["enabled"].(bool); !enabled {
+				v.errorf(path, "%s needs api_settings.tables.%s.query.enabled: subscribers get the rows query would return", name, name)
+			}
+			if !v.readableKey[name] {
+				v.warnf(path, "%s has no readable primary key: clients can't tell which of their rows a change is about", name)
+			}
+		}
+		seen[name] = true
+	}
+}
+
 func (v *validator) webhooks(hooks map[string]any) {
 	for name, h := range hooks {
 		path := "api_settings.webhooks." + name

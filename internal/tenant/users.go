@@ -152,7 +152,7 @@ func SetUserRole(ctx context.Context, dataDir, id, email, role string) (*UserInf
 	if len(changed) == 0 {
 		return nil, ErrUserNotFound
 	}
-	if err := EmitWebhooks(ctx, &Tx{Tx: tx}, cfg, "users", OpUpdate, changed); err != nil {
+	if err := EmitChanges(ctx, &Tx{Tx: tx}, cfg, "users", OpUpdate, changed); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

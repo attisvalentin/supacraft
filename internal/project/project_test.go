@@ -615,6 +615,43 @@ func TestValidate_Webhooks(t *testing.T) {
 	}
 }
 
+func TestValidate_Realtime(t *testing.T) {
+	p := load(t, `{"name": "x",
+	  "schema": {"tables": [
+	    {"name": "messages", "columns": [{"name": "id", "type": "uuid", "primary": true}]},
+	    {"name": "notes", "columns": [{"name": "id", "type": "uuid", "primary": true}]}]},
+	  "api_settings": {
+	    "tables": {"messages": {"query": {"enabled": true}}, "notes": {"query": {"enabled": false}}},
+	    "realtime": {"tables": ["messages", "notes", "ghost", "messages", 5]}}}`)
+	errs := map[string]bool{}
+	for _, i := range p.Validate() {
+		if i.Severity == "error" {
+			errs[i.Path] = true
+		}
+	}
+	for _, want := range []string{
+		"api_settings.realtime.tables[1]", "api_settings.realtime.tables[2]",
+		"api_settings.realtime.tables[3]", "api_settings.realtime.tables[4]",
+	} {
+		if !errs[want] {
+			t.Errorf("missing error at %s (got %v)", want, errs)
+		}
+	}
+	if errs["api_settings.realtime.tables[0]"] {
+		t.Error("a streamable table was rejected")
+	}
+	p = load(t, `{"name": "x",
+	  "schema": {"tables": [{"name": "logs", "columns": [{"name": "id", "type": "uuid", "primary": true, "readable": false}]}]},
+	  "api_settings": {"tables": {"logs": {"query": {"enabled": true}}}, "realtime": {"tables": ["logs"]}}}`)
+	if issues := p.Validate(); len(issues) != 1 || issues[0].Severity != "warning" || issues[0].Path != "api_settings.realtime.tables[0]" {
+		t.Errorf("hidden primary key: %v", issues)
+	}
+	p = load(t, `{"name": "x", "api_settings": {"realtime": {"tables": "messages"}}}`)
+	if issues := p.Validate(); len(issues) == 0 || issues[0].Path != "api_settings.realtime.tables" {
+		t.Errorf("tables must be a list: %v", issues)
+	}
+}
+
 func TestValidate_OAuth(t *testing.T) {
 	p := load(t, `{"name": "x", "auth_enabled": true, "api_settings": {"auth": {"oauth": {
 	  "public_url": "https://api.example.com/v1",

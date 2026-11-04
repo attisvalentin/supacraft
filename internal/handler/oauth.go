@@ -259,7 +259,7 @@ func oauthUser(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, nam
 // registered it (account pre-hijacking) loses the password and every
 // session; the owner can reset a password later.
 func claimUnverified(ctx context.Context, db *tenant.DB, cfg *tenant.TenantConfig, userID string) error {
-	_, err := tenant.WriteWithWebhooks(ctx, db, cfg, "users", tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
+	_, err := tenant.WriteWithChanges(ctx, db, cfg, "users", tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
 		return queryRows(ctx, q, cfg, `UPDATE "users" SET "password" = ?, "email_verified" = 1, "session_version" = COALESCE("session_version", 0) + 1, "updated_at" = datetime('now') WHERE "id" = ? RETURNING *`, noPassword, userID)
 	})
 	return err

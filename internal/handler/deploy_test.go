@@ -30,7 +30,7 @@ func newEmptyCentral(t *testing.T) (*remote.Client, string, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { errLog.Close() })
-	srv := httptest.NewServer(NewRouter(tenant.NewCachedStore(store), tenant.NewPoolManager(cfg), errLog, cfg))
+	srv := httptest.NewServer(NewRouter(tenant.NewCachedStore(store), tenant.NewPoolManager(cfg), errLog, cfg, nil))
 	t.Cleanup(srv.Close)
 	c, err := remote.New(srv.URL, adminSecret)
 	if err != nil {

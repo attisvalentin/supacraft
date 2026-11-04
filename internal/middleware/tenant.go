@@ -28,7 +28,7 @@ func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tenantID := r.Header.Get("X-Tenant-ID")
 			if tenantID == "" {
-				tenantID = oauthTenant(r)
+				tenantID = urlTenant(r)
 				if tenantID == "" {
 					tenantID = defaultTenant
 				}
@@ -70,15 +70,17 @@ func TenantMiddleware(store *tenant.CachedStore, defaultTenant string) func(http
 	}
 }
 
-// oauthTenant is the tenant of an OAuth browser redirect, which can't carry
-// the X-Tenant-ID header: ?tenant= on the start URL, and the "<tenant>."
-// prefix of the state on the provider's callback.
-func oauthTenant(r *http.Request) string {
-	if !strings.HasPrefix(r.URL.Path, "/auth/oauth/") {
+// urlTenant is the tenant of a request a browser makes without the
+// X-Tenant-ID header: ?tenant= on a WebSocket (/realtime) or the OAuth
+// start URL, and the "<tenant>." prefix of the state on the provider's
+// OAuth callback.
+func urlTenant(r *http.Request) string {
+	realtime := r.URL.Path == "/realtime"
+	if !realtime && !strings.HasPrefix(r.URL.Path, "/auth/oauth/") {
 		return ""
 	}
 	q := r.URL.Query()
-	if t := q.Get("tenant"); t != "" {
+	if t := q.Get("tenant"); t != "" || realtime {
 		return t
 	}
 	if t, _, ok := strings.Cut(q.Get("state"), "."); ok {

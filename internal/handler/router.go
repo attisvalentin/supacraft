@@ -6,6 +6,7 @@ import (
 	"github.com/attisvalentin/supacraft/internal/config"
 	"github.com/attisvalentin/supacraft/internal/errorlog"
 	"github.com/attisvalentin/supacraft/internal/middleware"
+	"github.com/attisvalentin/supacraft/internal/realtime"
 	"github.com/attisvalentin/supacraft/internal/tenant"
 
 	"github.com/go-chi/chi/v5"
@@ -14,7 +15,12 @@ import (
 // authAttemptsPerMinute limits /auth/* calls per tenant and client IP.
 const authAttemptsPerMinute = 20
 
-func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *errorlog.ErrorLog, serverCfg *config.Config) http.Handler {
+// NewRouter builds the API. hub streams table changes on /realtime; nil
+// gives the router its own.
+func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *errorlog.ErrorLog, serverCfg *config.Config, hub *realtime.Hub) http.Handler {
+	if hub == nil {
+		hub = realtime.NewHub(store, pool)
+	}
 	r := chi.NewRouter()
 
 	r.Use(middleware.CORSPreflight)
@@ -28,6 +34,8 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 
 		// Uploads enforce MaxFileSize themselves; everything else is JSON.
 		r.Post("/files", HandleFileUpload(pool, serverCfg))
+		// A WebSocket: no request body, the connection limits itself.
+		r.Get("/realtime", HandleRealtime(pool, hub, serverCfg.TrustProxy))
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.MaxBody(serverCfg.MaxBodySize))
@@ -90,6 +98,7 @@ func NewRouter(store *tenant.CachedStore, pool *tenant.PoolManager, errLog *erro
 		r.Get("/admin/tenants/{tenantID}/jobs", HandleJobsList(serverCfg))
 		r.Post("/admin/tenants/{tenantID}/jobs", HandleJobEnqueue(serverCfg))
 		r.Post("/admin/tenants/{tenantID}/jobs/{jobID}/retry", HandleJobRetry(serverCfg))
+		r.Get("/admin/tenants/{tenantID}/changes", HandleChangesList(serverCfg))
 		r.Post("/admin/tenants/{tenantID}/users/role", HandleUserSetRole(serverCfg))
 		r.Get("/admin/tenants/{tenantID}/secrets", HandleSecretsList(serverCfg))
 		r.Put("/admin/tenants/{tenantID}/secrets/{name}", HandleSecretSet(serverCfg, store))

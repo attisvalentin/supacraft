@@ -79,6 +79,8 @@ type AuthClaims struct {
 	// Role is read from the users table on every request, so a role
 	// change applies to tokens already issued. "" when roles are off.
 	Role string
+	// Version is the session version the token was issued for.
+	Version int64
 }
 
 type Relation struct {
@@ -354,6 +356,8 @@ type APISettings struct {
 	OpenAPI *bool `json:"openapi,omitempty"`
 	// Webhooks POST table changes to other systems, by name.
 	Webhooks map[string]Webhook `json:"webhooks,omitempty"`
+	// Realtime streams table changes over WebSocket.
+	Realtime *RealtimeSettings `json:"realtime,omitempty"`
 }
 
 // OpenAPIEnabled reports whether GET /meta/openapi.json is served.

@@ -115,7 +115,7 @@ func newTestAPIServing(t *testing.T, projectJSON string, asDefault bool) *testAP
 
 	return &testAPI{
 		t:       t,
-		handler: NewRouter(tenant.NewCachedStore(store), pools, errLog, cfg),
+		handler: NewRouter(tenant.NewCachedStore(store), pools, errLog, cfg, nil),
 		dbPath:  filepath.Join(p.DataDir(), p.TenantID()+".db"),
 	}
 }

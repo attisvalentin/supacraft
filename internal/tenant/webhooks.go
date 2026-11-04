@@ -66,16 +66,7 @@ func EmitWebhooks(ctx context.Context, q Querier, cfg *TenantConfig, table, op s
 	if len(rows) == 0 || !cfg.WantsWebhook(table, op) {
 		return nil
 	}
-	readable := map[string]bool{}
-	for _, t := range cfg.Schema.Tables {
-		if t.Name == table {
-			for i := range t.Columns {
-				if t.Columns[i].IsReadable() {
-					readable[t.Columns[i].Name] = true
-				}
-			}
-		}
-	}
+	readable := cfg.ReadableColumns(table)
 	out := make([]any, len(rows))
 	for i, row := range rows {
 		r := map[string]any{}
@@ -114,19 +105,19 @@ func WebhookName(function string) (string, bool) {
 	return strings.CutPrefix(function, WebhookJobPrefix)
 }
 
-// WriteWithWebhooks runs write (which changes table and returns the
-// changed rows) and queues the webhooks for them atomically: when q is a
-// plain pool and a webhook wants op on table, both run in one transaction,
-// so a delivery exists exactly when the change commits. Inside a caller's
+// WriteWithChanges runs write (which changes table and returns the
+// changed rows) and emits the change (EmitChanges) atomically: when q is a
+// plain pool and a webhook or realtime wants it, both run in one
+// transaction, so a delivery exists exactly when the change commits. Inside a caller's
 // transaction they simply join it.
-func WriteWithWebhooks(ctx context.Context, q Querier, cfg *TenantConfig, table, op string, write func(Querier) ([]map[string]any, error)) ([]map[string]any, error) {
+func WriteWithChanges(ctx context.Context, q Querier, cfg *TenantConfig, table, op string, write func(Querier) ([]map[string]any, error)) ([]map[string]any, error) {
 	db, isPool := q.(*DB)
-	if !isPool || !cfg.WantsWebhook(table, op) {
+	if !isPool || !cfg.WantsChanges(table, op) {
 		rows, err := write(q)
 		if err != nil {
 			return nil, err
 		}
-		return rows, EmitWebhooks(ctx, q, cfg, table, op, rows)
+		return rows, EmitChanges(ctx, q, cfg, table, op, rows)
 	}
 	tx, err := db.Begin(ctx)
 	if err != nil {
@@ -137,7 +128,7 @@ func WriteWithWebhooks(ctx context.Context, q Querier, cfg *TenantConfig, table,
 	if err != nil {
 		return nil, err
 	}
-	if err := EmitWebhooks(ctx, tx, cfg, table, op, rows); err != nil {
+	if err := EmitChanges(ctx, tx, cfg, table, op, rows); err != nil {
 		return nil, err
 	}
 	return rows, tx.Commit()

@@ -317,7 +317,7 @@ func ExecuteDBInsert(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	}
 
 	insertSQL, args := query.BuildInsert(table.Name, resolvedData)
-	results, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpInsert, func(q tenant.Querier) ([]map[string]any, error) {
+	results, err := tenant.WriteWithChanges(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpInsert, func(q tenant.Querier) ([]map[string]any, error) {
 		res, err := q.Exec(ctx, insertSQL, args...)
 		if err != nil {
 			return nil, fmt.Errorf("exec failed: %w", err)
@@ -367,7 +367,7 @@ func ExecuteDBUpdate(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 	}
 
 	updateSQL, args := query.BuildUpdate(table.Name, resolvedData, whereSql, whereArgs)
-	results, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
+	results, err := tenant.WriteWithChanges(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpUpdate, func(q tenant.Querier) ([]map[string]any, error) {
 		return query.QueryMaps(ctx, q, deps.Timezone, updateSQL+" RETURNING *", args...)
 	})
 	if err != nil {
@@ -403,9 +403,9 @@ func ExecuteDBDelete(ctx context.Context, step *tenant.FunctionStep, pCtx *Pipel
 
 	sql, args := query.BuildDelete(table.Name, whereSql, whereArgs)
 	var affected int64
-	if deps.Config.WantsWebhook(table.Name, tenant.OpDelete) {
-		// The webhook gets the deleted rows: RETURNING reads exactly those.
-		deleted, err := tenant.WriteWithWebhooks(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpDelete, func(q tenant.Querier) ([]map[string]any, error) {
+	if deps.Config.WantsChanges(table.Name, tenant.OpDelete) {
+		// Webhooks and realtime get the deleted rows: RETURNING reads exactly those.
+		deleted, err := tenant.WriteWithChanges(ctx, deps.DBPool, deps.Config, table.Name, tenant.OpDelete, func(q tenant.Querier) ([]map[string]any, error) {
 			return query.QueryMaps(ctx, q, deps.Timezone, sql+" RETURNING *", args...)
 		})
 		if err != nil {

@@ -61,7 +61,7 @@ func newCentralAPI(t *testing.T, secret string, central bool) (*httptest.Server,
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { errLog.Close() })
-	srv := httptest.NewServer(NewRouter(tenant.NewCachedStore(store), tenant.NewPoolManager(cfg), errLog, cfg))
+	srv := httptest.NewServer(NewRouter(tenant.NewCachedStore(store), tenant.NewPoolManager(cfg), errLog, cfg, nil))
 	t.Cleanup(srv.Close)
 	return srv, data
 }

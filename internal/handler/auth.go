@@ -320,19 +320,25 @@ func validateJWT(r *http.Request, cfg *tenant.TenantConfig, pool *tenant.PoolMan
 		return nil, fmt.Errorf("invalid authorization header format")
 	}
 
-	tokenString := parts[1]
+	claims, _, err := tokenClaims(r.Context(), cfg, pool, parts[1])
+	return claims, err
+}
 
-	dbPool, err := pool.GetPool(r.Context(), cfg)
+// tokenClaims checks an access token and the session behind it and
+// returns the caller with the token's expiry.
+func tokenClaims(ctx context.Context, cfg *tenant.TenantConfig, pool *tenant.PoolManager, tokenString string) (*tenant.AuthClaims, time.Time, error) {
+	var none time.Time
+	dbPool, err := pool.GetPool(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("database connection failed")
+		return nil, none, fmt.Errorf("database connection failed")
 	}
 
 	var jwtSecret string
-	err = dbPool.QueryRow(r.Context(),
+	err = dbPool.QueryRow(ctx,
 		`SELECT "jwt_secret" FROM "api_config" LIMIT 1`,
 	).Scan(&jwtSecret)
 	if err != nil {
-		return nil, fmt.Errorf("auth configuration missing")
+		return nil, none, fmt.Errorf("auth configuration missing")
 	}
 
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
@@ -343,32 +349,37 @@ func validateJWT(r *http.Request, cfg *tenant.TenantConfig, pool *tenant.PoolMan
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, none, err
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return nil, fmt.Errorf("invalid token claims")
+		return nil, none, fmt.Errorf("invalid token claims")
 	}
 
 	if claims["type"] == "refresh" {
-		return nil, fmt.Errorf("refresh token cannot be used as access token")
+		return nil, none, fmt.Errorf("refresh token cannot be used as access token")
 	}
 
 	userID, _ := claims["sub"].(string)
 	email, _ := claims["email"].(string)
 	// A token is good while the user exists, is active and hasn't reset
 	// the password since it was issued ("ver"; absent counts as 0).
-	sess, ok := loadSession(r.Context(), dbPool, userID)
+	sess, ok := loadSession(ctx, dbPool, userID)
 	if claimed, _ := claims["ver"].(float64); !ok || int64(claimed) != sess.version {
-		return nil, fmt.Errorf("session ended")
+		return nil, none, fmt.Errorf("session ended")
+	}
+	exp, err := claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		return nil, none, fmt.Errorf("token has no expiry")
 	}
 
 	return &tenant.AuthClaims{
-		UserID: userID,
-		Email:  email,
-		Role:   cfg.APISettings.Auth.EffectiveRole(sess.role),
-	}, nil
+		UserID:  userID,
+		Email:   email,
+		Role:    cfg.APISettings.Auth.EffectiveRole(sess.role),
+		Version: sess.version,
+	}, exp.Time, nil
 }
 
 // authorize enforces a route's access rule: needAuth requires a valid

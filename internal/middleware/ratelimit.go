@@ -18,6 +18,12 @@ func clientKey(trustProxy bool) httprate.KeyFunc {
 	return httprate.KeyByIP
 }
 
+// ClientIP is the caller's address as the rate limits see it.
+func ClientIP(r *http.Request, trustProxy bool) string {
+	ip, _ := clientKey(trustProxy)(r)
+	return ip
+}
+
 // RateLimitMiddleware enforces api_settings.rate_limit per tenant and client
 // IP, so one noisy client cannot use up the quota of every other client. The
 // limit is read from the tenant config in context, so this middleware must be

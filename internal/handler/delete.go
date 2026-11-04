@@ -79,9 +79,9 @@ func HandleDelete(pool *tenant.PoolManager) http.HandlerFunc {
 		}
 
 		var affected int64
-		if cfg.WantsWebhook(table.Name, tenant.OpDelete) {
-			// The webhook gets the deleted rows: RETURNING reads exactly those.
-			deleted, err := tenant.WriteWithWebhooks(r.Context(), dbPool, cfg, table.Name, tenant.OpDelete, func(q tenant.Querier) ([]map[string]any, error) {
+		if cfg.WantsChanges(table.Name, tenant.OpDelete) {
+			// Webhooks and realtime get the deleted rows: RETURNING reads exactly those.
+			deleted, err := tenant.WriteWithChanges(r.Context(), dbPool, cfg, table.Name, tenant.OpDelete, func(q tenant.Querier) ([]map[string]any, error) {
 				return queryRows(r.Context(), q, cfg, sql+" RETURNING *", args...)
 			})
 			if err != nil {
