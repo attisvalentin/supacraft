@@ -50,14 +50,14 @@ want a real backend in minutes rather than days and you don't want to run anyone
 | 👥 **Roles** | `user`, `editor`, `admin` or your own; limit any table method, file endpoint or function to some roles |
 | ⚡ **Custom endpoints** | `/fn/posts/{id}` routes built from steps: queries with joins and aggregates, transactions, input validation, if/else, loops, try/catch, math, HTTP calls, emails |
 | ⏰ **Cron jobs** | The same steps on a schedule (`0 3 * * *`) |
-| 🧵 **Background jobs** | `job.enqueue` runs a function later, retried with backoff until it succeeds; survives restarts |
-| 🪝 **Webhooks** | Table changes POSTed to other systems, signed (HMAC) and retried |
+| 🧵 **Background jobs** | `job.enqueue` runs a function later, retried with backoff up to its attempt limit; survives restarts |
+| 🪝 **Webhooks** | Table changes POSTed to other systems and retried; signed (HMAC) when you give them a secret |
 | 📡 **Realtime** | Clients subscribe over a WebSocket and get each change, filtered by the same access rules as `/query` |
 | 📁 **File storage** | Upload/download endpoints backed by local disk, S3/R2/MinIO, GCS, Azure, FTP or SFTP |
 | ✉️ **Email** | SMTP with templates |
 | 🧪 **Seed data and tests** | Development data and request-level tests in the same file; tests run on a fresh database with emails captured and HTTP calls mocked |
 | 📜 **OpenAPI 3.1** | Generated from your config for Swagger UI, Postman or typed clients |
-| 🤖 **AI-native** | Built-in MCP server: the agent can do everything the CLI can, and asks you before anything risky |
+| 🤖 **AI-native** | Built-in MCP server: the agent builds, tests and deploys the project and manages the central server, and asks you before anything risky |
 | 🔍 **Studio** | Read-only web UI to browse your data |
 | 🏢 **Many APIs, one server** | One `serve` process hosts every project; `supacraft deploy` adds or updates one live; `${NAME}` secrets stay on the server |
 
@@ -228,6 +228,7 @@ Roles, GitHub sign-in, a live comment feed, a webhook, seed users and tests are 
     ]
   },
   "api_settings": {
+    "cors": { "allowed_origin": "https://blog.example.com" },
     "auth": {
       "roles": ["reader", "editor"],
       "oauth": {
@@ -266,7 +267,7 @@ Roles, GitHub sign-in, a live comment feed, a webhook, seed users and tests are 
 ```bash
 supacraft test                                        # 2 passed: fresh database, nothing sent anywhere
 supacraft users set-role alice@example.com editor     # promote a real user
-supacraft realtime tail comments                      # watch the changes the WebSocket streams
+supacraft realtime tail comments                      # operator log: every change, no subscriber filters
 ```
 
 A browser follows the comments live:
@@ -325,8 +326,9 @@ signatures, job retries and the test format.
 
 Every command accepts `--dir` / `-C` to point at a project directory.
 
-`users`, `jobs` and `realtime` act on the central server when `--server` (or `SUPACRAFT_SERVER`) is set, and on
-the project's own database otherwise (`--local` forces that).
+`users`, `jobs` and `realtime` act on the central server when `--server` / `SUPACRAFT_SERVER` (from your machine)
+or `--data-dir` / `SUPACRAFT_DATA_DIR` (on the server) is set, and on the project's own database otherwise
+(`--local` forces that).
 
 `dev`, `mcp` and `studio` listen on `127.0.0.1` only, so your work-in-progress API is not reachable
 from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a phone).
@@ -334,10 +336,12 @@ from the network. Pass `--host 0.0.0.0` to expose it (for example to test from a
 
 ## MCP tools
 
-The agent can do everything you can do with the CLI. What changes a central server, deletes
-data or changes who may do what waits for **your** approval: the agent's request shows up as a
-prompt in your MCP client that only you can answer, bound to that exact action (an approval for
-one deploy can't be reused for another). Secret values never pass through the agent.
+The agent can manage the project and the central server the way you do with the CLI, through
+the tools below. Editing the local project and calling its API run directly. Changes to a
+central server, deleting data (`seed` with `reset`), user role changes and the systemd service
+wait for **your** approval: the agent's request shows up as a prompt in your MCP client that only
+you can answer, bound to that exact action (an approval for one deploy can't be reused for
+another). Secret values never pass through the agent; you set them with `supacraft secrets set`.
 
 | Tool | Purpose |
 |---|---|
@@ -489,7 +493,7 @@ addresses. To back up the app, back up `.supacraft/`
 - Passwords are bcrypt-hashed; a password reset or a disabled user ends every session, including open WebSockets.
 - Clients only ever see readable columns, and a table's row policy applies wherever clients read it: `/query`, includes and realtime.
 - OAuth uses PKCE towards the provider and a second, app-held PKCE against login CSRF; an account links only through an email the provider verified.
-- Webhooks are signed (`X-SupaCraft-Signature`, HMAC-SHA256 with a timestamp) so receivers can reject forgeries and replays.
+- Webhooks with a `secret` are signed (`X-SupaCraft-Signature`, HMAC-SHA256 with a timestamp) so receivers can reject forgeries and replays; validation warns about one without.
 - The table schema is never served over HTTP; the OpenAPI document (which can be turned off) lists only callable endpoints.
 - Central-server management is signed with `SUPACRAFT_ADMIN_SECRET` and off without it.
 
