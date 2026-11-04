@@ -67,12 +67,15 @@ var (
 )
 
 type validator struct {
-	issues    []Issue
-	tables    map[string]map[string]bool // table → columns
-	functions map[string]bool
-	private   map[string]bool // PRIVATE functions, which jobs may run
-	templates map[string]bool
-	relations []relationEnds
+	issues []Issue
+	tables map[string]map[string]bool // table → columns
+	// readableKey: tables with a readable primary key, which realtime
+	// clients use to apply changes.
+	readableKey map[string]bool
+	functions   map[string]bool
+	private     map[string]bool // PRIVATE functions, which jobs may run
+	templates   map[string]bool
+	relations   []relationEnds
 }
 
 type relationEnds struct {
@@ -160,6 +163,7 @@ func (p *Project) Validate() []Issue {
 func (v *validator) schema(schema map[string]any, authEnabled bool) {
 	if authEnabled {
 		v.tables["users"] = map[string]bool{}
+		v.readableKey = map[string]bool{"users": true} // the injected id
 		for _, c := range authUserColumns {
 			v.tables["users"][c["name"].(string)] = true
 		}
@@ -210,6 +214,12 @@ func (v *validator) schema(schema map[string]any, authEnabled bool) {
 			}
 			seen[cname] = true
 			v.tables[name][cname] = true
+			if primary, _ := cm["primary"].(bool); primary && cm["readable"] != false {
+				if v.readableKey == nil {
+					v.readableKey = map[string]bool{}
+				}
+				v.readableKey[name] = true
+			}
 
 			ctype, _ := cm["type"].(string)
 			if !columnTypes[strings.ToLower(ctype)] {
@@ -448,6 +458,9 @@ func (v *validator) realtime(s map[string]any) {
 		default:
 			if enabled, _ := asMap(asMap(asMap(s["tables"])[name])["query"])["enabled"].(bool); !enabled {
 				v.errorf(path, "%s needs api_settings.tables.%s.query.enabled: subscribers get the rows query would return", name, name)
+			}
+			if !v.readableKey[name] {
+				v.warnf(path, "%s has no readable primary key: clients can't tell which of their rows a change is about", name)
 			}
 		}
 		seen[name] = true

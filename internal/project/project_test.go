@@ -640,6 +640,12 @@ func TestValidate_Realtime(t *testing.T) {
 	if errs["api_settings.realtime.tables[0]"] {
 		t.Error("a streamable table was rejected")
 	}
+	p = load(t, `{"name": "x",
+	  "schema": {"tables": [{"name": "logs", "columns": [{"name": "id", "type": "uuid", "primary": true, "readable": false}]}]},
+	  "api_settings": {"tables": {"logs": {"query": {"enabled": true}}}, "realtime": {"tables": ["logs"]}}}`)
+	if issues := p.Validate(); len(issues) != 1 || issues[0].Severity != "warning" || issues[0].Path != "api_settings.realtime.tables[0]" {
+		t.Errorf("hidden primary key: %v", issues)
+	}
 	p = load(t, `{"name": "x", "api_settings": {"realtime": {"tables": "messages"}}}`)
 	if issues := p.Validate(); len(issues) == 0 || issues[0].Path != "api_settings.realtime.tables" {
 		t.Errorf("tables must be a list: %v", issues)
