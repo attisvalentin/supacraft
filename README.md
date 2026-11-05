@@ -4,6 +4,8 @@
 
 **Describe a backend in plain English. Get a running REST API.**
 
+<img src="docs/hero.svg" width="100%" alt="An agent turns a plain-English request into supacraft.json, and SupaCraft serves it as a REST, realtime and MCP backend">
+
 SupaCraft is an open-source backend that an AI agent builds for you: database, user accounts
 and roles, Google/GitHub sign-in, API endpoints, file uploads, emails, background jobs,
 webhooks and live updates, all defined in one JSON file and served by one small binary.
